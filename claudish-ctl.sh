@@ -25,10 +25,11 @@
 #                 I'm five), or "caveman" (blunt caveman speak); no name /
 #                 "default" resets to the plain rewrite.
 #                 A custom CLAUDISH_PROMPT_FILE always wins over styles
-#   language X    rewrite into language X, e.g. "language Brazilian Portuguese"
-#                 (no name / "default" resets to the session/settings language)
-#   model X       use model X for whatever provider is configured (no name /
-#                 "default" resets to the provider default; also turns on)
+#   language X    rewrite into English or 简体中文: "language en" / "language zh"
+#                 (any usual spelling; no name / "default" resets to the
+#                 session/settings language)
+#   model X       use model X for whatever CLI is configured (no name /
+#                 "default" resets to the CLI's own default; also turns on)
 #   last          print the ORIGINAL text of the last assistant message
 #   cycle         off -> append -> replace -> off
 #   reset         clear ALL overrides (off/mode/style/language/model) -> env
@@ -92,7 +93,7 @@ current_model() {
   m=""
   [ -f "$MODEL_FILE" ] && m="$(head -c 128 "$MODEL_FILE" 2>/dev/null | tr -cd 'A-Za-z0-9:._/-' | head -c 64)"
   [ -n "$m" ] && { printf '%s' "$m"; return; }
-  printf '%s' "${MODEL:-${CLAUDISH_MODEL:-unknown}}"
+  printf '%s' "${MODEL:-${CLAUDISH_MODEL:-cli default}}"
 }
 current_lang() {
   l="$(claudish_language "$PWD" 2>/dev/null)"
@@ -179,7 +180,7 @@ model_label() {
   case "$(model_source)" in
     flag)     WARN=1; printf '⚠ /claudish — beats env CLAUDISH_MODEL, persists across sessions' ;;
     env)      printf 'env CLAUDISH_MODEL' ;;
-    *)        printf '%s provider default' "${PROVIDER:-ollama}" ;;
+    *)        printf '%s CLI default' "${PROVIDER:-codex}" ;;
   esac
 }
 provider_label() { [ -n "${CLAUDISH_PROVIDER+x}" ] && printf 'env CLAUDISH_PROVIDER' || printf 'default'; }
@@ -192,8 +193,8 @@ dashboard() {
   printf '  %-9s %-16s · %s\n' 'style'    "$(current_style)"    "$_yl"
   printf '  %-9s %-16s · %s\n' 'language' "$(current_lang)"     "$_ll"
   printf '  %-9s %-16s · %s\n' 'model'    "$(current_model)"    "$_ml"
-  printf '  %-9s %-16s · %s\n' 'provider' "${PROVIDER:-ollama}" "$_pl"
-  printf '\n  change   /claudish on · off · append · replace · style <tldr|5y|caveman> · language <name> · model <name>\n'
+  printf '  %-9s %-16s · %s\n' 'provider' "${PROVIDER:-codex}" "$_pl"
+  printf '\n  change   /claudish on · off · append · replace · style <tldr|5y|caveman> · language <en|zh> · model <name>\n'
   printf '  other    /claudish last · cycle · reset (clear all overrides) · status\n'
   if [ "$WARN" = "1" ]; then
     printf '\n  ⚠ lines above are /claudish overrides in ~/.claude/claudish-* that persist\n'
@@ -246,20 +247,23 @@ case "$cmd" in
     turn_on
     ;;
   language)
-    # Take the WHOLE remaining argument so multi-word names survive (e.g.
-    # "Brazilian Portuguese"). lang.sh (via _claudish_lang_clean) does the
-    # authoritative normalisation on read, so multibyte names like "简体中文"
-    # survive too; here we only strip newlines and cap the length.
+    # Take the WHOLE remaining argument so "Simplified Chinese" survives, then
+    # normalise through lang.sh so only the two known languages are ever
+    # written; anything else is rejected here rather than silently ignored on
+    # read. The file stores the canonical name.
     shift
     lang="$(printf '%s' "$*" | tr -d '\r\n' | head -c 64)"
     case "$lang" in
       ''|default|Default) rm -f "$LANG_FILE" 2>/dev/null || fail "cannot remove $LANG_FILE" ;;
-      *) { printf '%s\n' "$lang" > "$LANG_FILE"; } 2>/dev/null || fail "cannot write $LANG_FILE" ;;
+      *)
+        canon="$(_claudish_lang_clean "$lang" 2>/dev/null)"
+        [ -n "$canon" ] || { printf 'claudish-ctl: unknown language "%s" (use en|zh|default)\n' "$lang" >&2; exit 2; }
+        { printf '%s\n' "$canon" > "$LANG_FILE"; } 2>/dev/null || fail "cannot write $LANG_FILE" ;;
     esac
     turn_on
     ;;
   model)
-    # Sanitise to the characters model names use (ollama tags, OpenAI/Anthropic ids).
+    # Sanitise to the characters model names use (vendor ids, provider/model tags).
     m="$(printf '%s' "${2:-}" | tr -cd 'A-Za-z0-9:._/-' | head -c 64)"
     case "$m" in
       ''|default|Default) rm -f "$MODEL_FILE" 2>/dev/null || fail "cannot remove $MODEL_FILE" ;;

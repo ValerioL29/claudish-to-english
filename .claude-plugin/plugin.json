@@ -1,20 +1,19 @@
 {
   "name": "claudish-to-english",
-  "description": "Shows a plain-language rewrite of each Claude Code assistant message, produced by a local LLM (ollama, default), the Anthropic API, or any OpenAI-compatible API. Switch it on the fly with /claudish (on/off, append/replace, language, model). Display-only: Claude's reasoning and the transcript keep the original text.",
+  "description": "Shows a plain-language rewrite of each Claude Code assistant message, in English or 简体中文, produced by a headless coding-agent CLI (codex exec, agy -p, or opencode run). Switch it on the fly with /claudish (on/off, append/replace, style, language, model). Display-only: Claude's reasoning and the transcript keep the original text.",
   "version": "0.9.0",
   "author": {
     "name": "Mike Gvozdev",
     "email": "mv.gvozdev@gmail.com",
     "url": "https://github.com/gvzdv"
   },
-  "homepage": "https://github.com/gvzdv/claudish-to-english#readme",
-  "repository": "https://github.com/gvzdv/claudish-to-english",
+  "homepage": "https://github.com/ValerioL29/claudish-to-english#readme",
+  "repository": "https://github.com/ValerioL29/claudish-to-english",
   "license": "MIT",
   "keywords": [
-    "ollama",
-    "local-llm",
-    "anthropic",
-    "openai",
+    "codex",
+    "opencode",
+    "chinese",
     "hooks",
     "readability",
     "plain-language",

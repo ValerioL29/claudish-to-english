@@ -35,8 +35,8 @@ release a single deliberate commit instead of a scatter of half-bumps.
 
 ## Setting up
 
-You need `bash`, `jq`, and `curl`. For an end-to-end run you also need a
-provider — but for most work you do **not**: `CLAUDISH_STUB=1` replaces the LLM
+You need `bash` and `jq`. For an end-to-end run you also need one of the
+CLIs (`codex`, `agy`, `opencode`) logged in — but for most work you do **not**: `CLAUDISH_STUB=1` replaces the LLM
 call with a deterministic string, which is enough to test all the display
 mechanics.
 
@@ -46,7 +46,7 @@ are not running two copies at once:
 
 ```jsonc
 {
-  "enabledPlugins": { "claudish-to-english@gvzdv-plugins": false },
+  "enabledPlugins": { "claudish-to-english@valeriol29-plugins": false },
   "env": { "CLAUDISH_STUB": "1", "CLAUDISH_MIN_CHARS": "50", "CLAUDISH_DEBUG": "1" },
   "hooks": {
     "MessageDisplay": [
@@ -192,7 +192,7 @@ Small, focused PRs get reviewed faster. Two unrelated changes are two PRs.
 Versioning is [SemVer](https://semver.org) at `0.x`:
 
 - **MINOR** for a new user-facing feature — a style preset, a provider, a new
-  env var. (0.6.0 codex provider, 0.7.0 oauth mode, 0.8.0 caveman preset.)
+  env var.
 - **PATCH** for fixes only, nothing new. (0.7.1.)
 
 Only two files carry a version: `.claude-plugin/plugin.json` and
@@ -207,8 +207,8 @@ git switch -c release/0.9.0 origin/main
 # 2. CHANGELOG.md: "## [Unreleased]"  ->  "## [0.9.0] - YYYY-MM-DD"
 
 # 3. CHANGELOG.md link refs at the bottom: add the new version, repoint Unreleased
-#    [Unreleased]: https://github.com/gvzdv/claudish-to-english/compare/v0.9.0...HEAD
-#    [0.9.0]:      https://github.com/gvzdv/claudish-to-english/compare/v0.8.0...v0.9.0
+#    [Unreleased]: https://github.com/ValerioL29/claudish-to-english/compare/v0.9.0...HEAD
+#    [0.9.0]:      https://github.com/ValerioL29/claudish-to-english/compare/v0.8.0...v0.9.0
 
 # 4. .claude-plugin/plugin.json: bump "version"
 

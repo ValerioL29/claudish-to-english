@@ -5,6 +5,39 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+This fork (ValerioL29/claudish-to-english) trims the plugin to what one person
+actually runs. Both changes below are deliberate simplifications, not bug fixes.
+
+### Changed
+- **Providers are headless CLIs only: `codex exec` (default), `agy -p`, and
+  `opencode run`.** Each is a coding-agent CLI that is already logged in on the
+  machine, so the plugin needs no API keys, base URLs, or local model server,
+  and `curl` is no longer a dependency. `CLAUDISH_PROVIDER`, `CLAUDISH_MODEL`,
+  `/claudish model`, and `CLAUDISH_TIMEOUT` keep their meaning; the model is
+  passed straight to the CLI (empty = its own default). A single
+  `CLAUDISH_EFFORT` sets the reasoning effort for the rewrite on codex and agy
+  (`CLAUDISH_CODEX_EFFORT` still works as an alias). One shared runner handles
+  the timeout and stderr capture for all three, and every CLI is told up front
+  not to use tools; codex additionally runs `--sandbox read-only --ephemeral`
+  outside any repo. The setup notice now names the missing CLI, the timeout,
+  or the CLI's own error.
+- **Only two output languages, English and 简体中文.** `lang.sh` normalises the
+  usual spellings (`en`, `zh`, `zh-CN`, `Chinese`, `中文`, `简体中文`, …) to one of
+  two canonical names and maps anything else to "unset", which keeps the
+  message's own language. That also replaces the old control-character
+  sanitiser: only one of two fixed strings can reach a prompt or the screen.
+  `/claudish language` now rejects an unknown language instead of silently
+  ignoring it, and the on-screen label is Chinese when the target is Chinese
+  (💬 说**人话**：, 📌 **摘要**：, …).
+
+### Removed
+- The `ollama`, `anthropic`, and `openai` providers, `CLAUDISH_ANTHROPIC_AUTH=oauth`
+  and its once-per-session caution, and with them `CLAUDISH_OLLAMA`,
+  `CLAUDISH_*_KEY`, `CLAUDISH_*_URL`, `CLAUDISH_OPENAI_EFFORT`, and
+  `CLAUDISH_MAX_TOKENS`.
+
 ## [0.9.0] - 2026-08-28
 
 ### Added
@@ -252,7 +285,7 @@ by Davide Di Pumpo, adapted to the provider layer and language resolver.
 - Optional `PostToolUse` Markdown-file rewrite hook (`rewrite-md.sh`), opt-in by
   directory (`CLAUDISH_MD_DIR`), with `sibling` and `overwrite` modes.
 
-[Unreleased]: https://github.com/gvzdv/claudish-to-english/compare/v0.9.0...HEAD
+[Unreleased]: https://github.com/ValerioL29/claudish-to-english/compare/v0.9.0...HEAD
 [0.9.0]: https://github.com/gvzdv/claudish-to-english/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/gvzdv/claudish-to-english/compare/v0.7.1...v0.8.0
 [0.7.1]: https://github.com/gvzdv/claudish-to-english/compare/v0.7.0...v0.7.1
