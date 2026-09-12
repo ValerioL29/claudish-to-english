@@ -3,8 +3,8 @@
 # PostToolUse Markdown rewrite hook  (opt-in by directory, fail-open)
 #
 # Fires after a Write/Edit and, IF the written file is a Markdown file that
-# lives under CLAUDISH_MD_DIR, rewrites its prose into plain English using a
-# local LLM (ollama). PostToolUse.updatedToolOutput only changes what Claude
+# lives under CLAUDISH_MD_DIR, rewrites its prose into plain language through
+# the configured headless CLI (see providers.sh). PostToolUse.updatedToolOutput only changes what Claude
 # SEES, not the bytes on disk, so this hook does the file write itself.
 #
 # OPT-IN: does nothing unless CLAUDISH_MD_DIR is set. Only *.md files whose
@@ -19,7 +19,7 @@
 # The writes here go through the shell, NOT Claude's Write tool, so they do
 # NOT re-trigger PostToolUse — no loop.
 #
-# FAIL-OPEN CONTRACT: on ANY problem (disabled, no jq/curl, not under the dir,
+# FAIL-OPEN CONTRACT: on ANY problem (disabled, no jq, not under the dir,
 # not markdown, parse error, LLM down, timeout, empty rewrite) the hook leaves
 # the file exactly as the agent wrote it and exits 0. It never writes a partial
 # or empty rewrite over real content.
@@ -36,19 +36,17 @@
 #   CLAUDISH_MD_PROMPT_FILE <path>    file holding a replacement Markdown prompt
 #                                     (whole prompt, not merged; empty or
 #                                     unreadable -> built-in default)
-#   CLAUDISH_LANG      <language>     language to rewrite into, e.g. "Esperanto".
-#                                     Unset falls back to the session's `language`
-#                                     setting from .claude/settings*.json (the same
-#                                     key Claude Code answers in); with neither set,
-#                                     the rewrite keeps the language of the file it
+#   CLAUDISH_LANG      en|zh          language to rewrite into (English or 简体中文,
+#                                     the only two here). Unset falls back to the
+#                                     session's `language` setting from
+#                                     .claude/settings*.json; with neither set, the
+#                                     rewrite keeps the language of the file it
 #                                     rewrites. Set it EMPTY to ignore the settings
-#                                     key, or to "English" to force English.
-#                                     See lang.sh
-#   CLAUDISH_PROVIDER  ollama|anthropic|openai  which LLM serves rewrites (default
-#                                     ollama; keys, base URLs, and per-provider model
-#                                     defaults are documented in providers.sh)
-#   CLAUDISH_MODEL     <model>        overrides the provider's default model
-#   CLAUDISH_OLLAMA    <base url>     (default http://localhost:11434)
+#                                     key. See lang.sh
+#   CLAUDISH_PROVIDER  codex|agy|opencode  which headless CLI serves rewrites
+#                                     (default codex; see providers.sh)
+#   CLAUDISH_MODEL     <model>        model passed to that CLI (empty = its default)
+#   CLAUDISH_EFFORT    low|medium|high reasoning effort for the rewrite only
 #   CLAUDISH_MIN_CHARS <n>            skip files whose prose (code stripped) is shorter (default 200)
 #   CLAUDISH_STUB      1|0            deterministic stub instead of the LLM (mechanics testing)
 #   CLAUDISH_MD_TIMEOUT <seconds>     LLM client timeout for file rewrites (default 150).
@@ -87,8 +85,8 @@ pass_through() { dbg "pass_through: ${1:-}"; exit 0; }
 
 SELF_DIR="$(cd "$(dirname "$0")" && pwd)"
 
-# Provider layer (ollama/anthropic/openai): MODEL/OLLAMA defaults,
-# llm_complete, llm_notice_why. Missing file -> fail open.
+# Provider layer (codex/agy/opencode CLIs): PROVIDER/MODEL, llm_complete,
+# llm_notice_why. Missing file -> fail open.
 . "$SELF_DIR/providers.sh" 2>/dev/null || pass_through "no providers.sh"
 
 # Output-language resolver (lang.sh). Defined here first so a missing file
@@ -110,7 +108,6 @@ canon() (
 [ "$ENABLED" = "1" ]        || pass_through "disabled"
 [ -n "$MD_DIR" ]            || pass_through "no CLAUDISH_MD_DIR (feature off)"
 command -v jq   >/dev/null 2>&1 || pass_through "no jq"
-command -v curl >/dev/null 2>&1 || pass_through "no curl"
 
 payload="$(cat)"
 [ -n "$payload" ] || pass_through "empty payload"
@@ -187,7 +184,7 @@ dbg "language=${OUT_LANG:-same as the file (default)}"
 
 # ---- obtain the rewrite ---------------------------------------------------
 rewrite=""
-curl_rc=0
+llm_rc=0
 err=""
 if [ "$STUB" = "1" ]; then
   rewrite="STUB-SIMPLIFIED-MD ✦ mode=$MD_MODE prose_len=$prose_len ✦"$'\n\n'"$body"
@@ -217,14 +214,14 @@ else
 fi
 
 # Empty/failed rewrite -> fail open (file left exactly as the agent wrote it).
-# When the cause is a FIXABLE setup problem (ollama down, timeout, model not
-# pulled), surface a ONE-TIME, per-session systemMessage so the silent skip is
+# When the cause is a FIXABLE setup problem (CLI missing, timeout, CLI error),
+# surface a ONE-TIME, per-session systemMessage so the silent skip is
 # not a mystery. A systemMessage does not block the tool and is not fed to
 # Claude as context; the file is still left untouched either way.
 if [ -z "$rewrite" ]; then
   notified="$LOG_ROOT/$SID.md-notified"
   if [ "$NOTICE" = "1" ] && [ ! -e "$notified" ]; then
-    TIMEOUT_HINT="raise CLAUDISH_MD_TIMEOUT (and the PostToolUse hook timeout in hooks.json), or set CLAUDISH_MODEL to a smaller model"
+    TIMEOUT_HINT="raise CLAUDISH_MD_TIMEOUT (and the PostToolUse hook timeout in hooks.json), or set CLAUDISH_EFFORT=low / CLAUDISH_MODEL to a faster model"
     llm_notice_why
     why=""
     [ -n "$NOTICE_WHY" ] && why="$NOTICE_WHY — Markdown rewrite of $(basename "$file") skipped, file left unchanged."
@@ -254,18 +251,4 @@ fi
 
 mv -f "$tmp" "$target" 2>/dev/null || { rm -f "$tmp" 2>/dev/null; pass_through "atomic mv failed"; }
 dbg "wrote $target (mode=$MD_MODE)"
-
-# Once-per-session oauth caution: oauth mode bills rewrites to the user's
-# Claude subscription through an unofficial mechanism, and a systemMessage is
-# the only on-screen surface this hook has. The marker is shared with the
-# display hook (same root and session id) — one caution per session, not two.
-oauth_noted="$LOG_ROOT/$SID.oauth-noted"
-if [ "$NOTICE" = "1" ] && [ ! -e "$oauth_noted" ]; then
-  _onote="$(llm_oauth_note 2>/dev/null)"
-  if [ -n "$_onote" ]; then
-    : > "$oauth_noted" 2>/dev/null || true
-    jq -n --arg m "claudish-to-english: $_onote. Shown once per session; set CLAUDISH_NOTICE=0 to silence." \
-      '{systemMessage:$m}' 2>/dev/null
-  fi
-fi
 exit 0

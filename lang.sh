@@ -1,56 +1,47 @@
 #!/usr/bin/env bash
 # ---------------------------------------------------------------------------
-# Output-language resolver for claudish-to-english. Sourced by rewrite.sh and
-# rewrite-md.sh — not executed directly.
+# Output-language resolver for claudish-to-english. Sourced by rewrite.sh,
+# rewrite-md.sh, claudish-ctl.sh and session-notice.sh — not executed directly.
 #
-# claudish_language [CWD] prints the language the rewrite should be written in,
-# or nothing at all — and nothing means "no language was configured", which
-# leaves the rewrite in whatever language the text it rewrites is already
-# written in. English is not a default here, only one possible answer.
+# Two languages exist here: English and 简体中文. claudish_language [CWD] prints
+# one of those two canonical names, or nothing — and nothing means "no language
+# was configured", which leaves the rewrite in whatever language the text it
+# rewrites is already written in. The rewrite direction (中→英 or 英→中) is
+# therefore whatever the prompt ends up saying: a configured target, or the
+# text's own language.
 # First non-empty source wins:
-#   1. CLAUDISH_LANG                      explicit override. Set but EMPTY
-#                                         ignores the settings below and keeps
-#                                         the text's own language; set it to
-#                                         "English" to actually force English.
-#   2. <cwd>/.claude/settings.local.json  .language
-#   3. <cwd>/.claude/settings.json        .language
-#   4. ~/.claude/settings.json            .language
+#   1. ~/.claude/claudish-lang               /claudish language en|zh (flag file)
+#   2. CLAUDISH_LANG                         explicit override. Set but EMPTY
+#                                            ignores the settings below and
+#                                            keeps the text's own language.
+#   3. <cwd>/.claude/settings.local.json     .language
+#   4. <cwd>/.claude/settings.json           .language
+#   5. ~/.claude/settings.json               .language
 #
-# 2-4 read the same `language` key Claude Code itself reads to build the
+# 3-5 read the same `language` key Claude Code itself reads to build the
 # "# Language" block of its system prompt, in the same precedence order. So a
-# session already answering in one language gets its rewrite in that language,
-# with nothing extra to configure.
+# session already answering in Chinese gets its rewrite in Chinese, with
+# nothing extra to configure.
 #
-# The value is normalized to at most three words and 30 codepoints, with control
-# characters folded to spaces, because it lands in a system prompt and in an
-# on-screen label — and a project's .claude/settings.json travels with the
-# repository, so it is not necessarily the local user's own text. A language
-# name fits ("Esperanto", "简体中文", "Brazilian Portuguese"); a paragraph of
-# smuggled instructions does not, and neither does a terminal escape sequence.
+# Every value is normalised through _claudish_lang_clean, which accepts the
+# usual spellings of the two languages and maps ANYTHING else to empty. That is
+# also the sanitiser: a project's .claude/settings.json travels with the
+# repository and is not necessarily the local user's own text, and the value
+# lands in a prompt and in an on-screen label — but only one of two fixed
+# strings can ever come out of here, so no foreign byte reaches either.
 # Every failure — no jq, unreadable or malformed JSON, missing or non-string
-# key — comes back as an empty string, never an error: an unusable setting must
-# leave rewrites working, in English.
+# key — comes back as an empty string, never an error.
 # ---------------------------------------------------------------------------
 
-# Fold control characters to spaces, collapse whitespace, trim, keep at most 3
-# words / 30 codepoints (jq slices by codepoint, so multibyte names survive).
-# Empty in -> empty out.
-#
-# The control-character fold matters because this value is printed straight into
-# the on-screen label, and ESC is not whitespace: without it a `language` of
-# $'\033[2J' would reach the terminal as a real escape sequence. Folding to a
-# space rather than deleting keeps "Brazilian\nPortuguese" two words, and turns
-# an escape into harmless literal text that the word/length caps then trim.
-# Filtering by codepoint (not a regex) avoids depending on how the regex engine
-# spells a control-character class.
+# Map a user-facing spelling to the canonical name, or to empty. Whitespace is
+# dropped and ASCII case folded first ("Simplified Chinese", "zh-CN", "英文").
+# tr's byte-wise case fold is safe on UTF-8: every byte of a multibyte character
+# is >= 0x80, outside A-Z.
 _claudish_lang_clean() {
-  [ -n "$1" ] || return 0
-  jq -jn --arg v "$1" \
-    '$v | explode
-        | map(if . < 32 or . == 127 or (. >= 128 and . <= 159) then 32 else . end)
-        | implode
-        | gsub("\\s+"; " ") | ltrimstr(" ") | rtrimstr(" ")
-        | [splits(" ")][0:3] | join(" ") | .[0:30]' 2>/dev/null
+  case "$(printf '%s' "${1:-}" | tr -d '[:space:]' | tr 'A-Z' 'a-z')" in
+    en|eng|english|英文|英语)                                   printf 'English' ;;
+    zh|zh-cn|zh-hans|cn|chinese|simplifiedchinese|中文|简体中文|汉语) printf '简体中文' ;;
+  esac
   return 0
 }
 
@@ -61,7 +52,7 @@ claudish_language() {
   # settings files for the same reason the off-file sits above CLAUDISH_ENABLED
   # — only a per-message file can be flipped without relaunching. `/claudish
   # language default` removes it and restores the resolution below. The file
-  # persists across sessions (like the off-file); cleaned like every source.
+  # persists across sessions (like the off-file).
   _cl_file="${CLAUDISH_LANG_FILE:-${HOME:-}/.claude/claudish-lang}"
   if [ -f "$_cl_file" ]; then
     _cl_rv="$(_claudish_lang_clean "$(head -c 64 "$_cl_file" 2>/dev/null)")"
@@ -69,8 +60,8 @@ claudish_language() {
   fi
 
   # An explicitly set CLAUDISH_LANG always wins, including an explicitly EMPTY
-  # one — the escape hatch for keeping rewrites in English on a session that
-  # speaks something else.
+  # one — the escape hatch for keeping each message's own language on a session
+  # whose settings name one.
   if [ -n "${CLAUDISH_LANG+x}" ]; then
     _claudish_lang_clean "$CLAUDISH_LANG"
     return 0

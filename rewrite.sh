@@ -52,22 +52,21 @@
 #                                          (whole prompt, not merged; empty or
 #                                          unreadable -> built-in default,
 #                                          overriding any CLAUDISH_STYLE)
-#   CLAUDISH_LANG      <language>     language to rewrite into, e.g. "Esperanto".
-#                                          Unset falls back to the session's
-#                                          `language` setting from
-#                                          .claude/settings*.json (the same key
-#                                          Claude Code answers in); with neither
-#                                          set, the rewrite simply keeps the
-#                                          language of the message it rewrites.
-#                                          Set it EMPTY to ignore the settings
-#                                          key, or to "English" to force
-#                                          English. See lang.sh
-#   CLAUDISH_PROVIDER  ollama|anthropic|openai  which LLM serves rewrites
-#                                           (default ollama; keys, base URLs,
-#                                           and per-provider model defaults
-#                                           are documented in providers.sh)
-#   CLAUDISH_MODEL     <model>         overrides the provider's default model
-#   CLAUDISH_OLLAMA    <base url>      (default http://localhost:11434)
+#   CLAUDISH_LANG      en|zh          language to rewrite into (English or
+#                                          简体中文 — the only two here; any
+#                                          usual spelling works). Unset falls
+#                                          back to the session's `language`
+#                                          setting from .claude/settings*.json
+#                                          (the same key Claude Code answers
+#                                          in); with neither set, the rewrite
+#                                          keeps the language of the message it
+#                                          rewrites. Set it EMPTY to ignore the
+#                                          settings key. See lang.sh
+#   CLAUDISH_PROVIDER  codex|agy|opencode  which headless CLI serves rewrites
+#                                           (default codex; see providers.sh)
+#   CLAUDISH_MODEL     <model>         model passed to that CLI (empty = the
+#                                           CLI's own default)
+#   CLAUDISH_EFFORT    low|medium|high reasoning effort for the rewrite only
 #   CLAUDISH_MIN_CHARS <n>            skip messages shorter than this
 #                                           (prose, code stripped) (default 200)
 #   CLAUDISH_STUB      1|0            deterministic stub instead of the LLM
@@ -75,9 +74,9 @@
 #   CLAUDISH_TIMEOUT   <seconds>      LLM client timeout (default 45)
 #   CLAUDISH_DEBUG     1|0            write a debug log (default 0)
 #   CLAUDISH_NOTICE    1|0            once-per-session on-screen notice when the
-#                                           rewrite is skipped because the
-#                                           provider is unreachable, times out,
-#                                           is missing a key or model (default 1)
+#                                           rewrite is skipped because the CLI is
+#                                           missing, times out, or errors
+#                                           (default 1)
 # ---------------------------------------------------------------------------
 set -uo pipefail
 
@@ -131,8 +130,8 @@ pass_through() { dbg "pass_through"; exit 0; }
 
 SELF_DIR="$(cd "$(dirname "$0")" && pwd)"
 
-# Provider layer (ollama/anthropic/openai): MODEL/OLLAMA defaults,
-# llm_complete, llm_notice_why. Missing file -> fail open.
+# Provider layer (codex/agy/opencode CLIs): PROVIDER/MODEL, llm_complete,
+# llm_notice_why. Missing file -> fail open.
 . "$SELF_DIR/providers.sh" 2>/dev/null || pass_through
 
 # Output-language resolver (lang.sh). Defined here first so a missing file
@@ -160,7 +159,6 @@ emit_empty() {
 
 [ "$ENABLED" = "1" ] || pass_through
 command -v jq  >/dev/null 2>&1 || pass_through
-command -v curl >/dev/null 2>&1 || pass_through
 
 payload="$(cat)"
 [ -n "$payload" ] || pass_through
@@ -264,17 +262,23 @@ OUT_LANG="$(claudish_language "$cwd")"
 # `claude -p` output piped to a file. Bold is an attribute, not a palette
 # lookup, so it survives every theme and degrades to readable `**word**` text
 # when the output is not a terminal at all.
-case "$STYLE" in
-  tldr)    SEP=$'\n\n────────────────────────\n📌 **TL;DR**'"${OUT_LANG:+ in $OUT_LANG}"$':\n\n' ;;
-  5y)      SEP=$'\n\n────────────────────────\n👶 Like you\'re **five**'"${OUT_LANG:+, in $OUT_LANG}"$':\n\n' ;;
-  caveman) SEP=$'\n\n────────────────────────\n🦴 **Ugh.** Me say'"${OUT_LANG:+ in $OUT_LANG}"$':\n\n' ;;
-  *)       SEP=$'\n\n────────────────────────\n💬 In plain **'"${OUT_LANG:-language}"$'**:\n\n' ;;
+# The label is written in the target language: a Chinese reader gets a Chinese
+# label, everyone else the English one (with the language named when set).
+case "$OUT_LANG:$STYLE" in
+  简体中文:tldr)    SEP=$'\n\n────────────────────────\n📌 **摘要**：\n\n' ;;
+  简体中文:5y)      SEP=$'\n\n────────────────────────\n👶 讲给**五岁**小孩听：\n\n' ;;
+  简体中文:caveman) SEP=$'\n\n────────────────────────\n🦴 **呃。**原始人说：\n\n' ;;
+  简体中文:*)       SEP=$'\n\n────────────────────────\n💬 说**人话**：\n\n' ;;
+  *:tldr)          SEP=$'\n\n────────────────────────\n📌 **TL;DR**'"${OUT_LANG:+ in $OUT_LANG}"$':\n\n' ;;
+  *:5y)            SEP=$'\n\n────────────────────────\n👶 Like you\'re **five**'"${OUT_LANG:+, in $OUT_LANG}"$':\n\n' ;;
+  *:caveman)       SEP=$'\n\n────────────────────────\n🦴 **Ugh.** Me say'"${OUT_LANG:+ in $OUT_LANG}"$':\n\n' ;;
+  *)               SEP=$'\n\n────────────────────────\n💬 In plain **'"${OUT_LANG:-language}"$'**:\n\n' ;;
 esac
 dbg "language=${OUT_LANG:-same as the message (default)} style=${STYLE:-default}"
 
 # ---- obtain the rewrite --------------------------------------------------
 rewrite=""
-curl_rc=0
+llm_rc=0
 err=""
 if [ "$STUB" = "1" ]; then
   nparts="$(ls "$mdir"/*.part 2>/dev/null | wc -l | tr -d ' ')"
@@ -339,17 +343,15 @@ fi
 
 # Empty/failed rewrite -> fail open (or re-show original in replace mode).
 if [ -z "$rewrite" ]; then
-  dbg "empty rewrite -> fail open (curl_rc=$curl_rc)"
+  dbg "empty rewrite -> fail open (llm_rc=$llm_rc)"
 
   # One-time, per-session notice when the cause is a FIXABLE setup problem:
-  # provider unreachable (curl_rc!=0 — connection refused, timeout, DNS), a
-  # missing API key, or the provider returning an error (e.g. the ollama model
-  # was never pulled). A merely empty completion — provider up, no error —
-  # stays silent (llm_notice_why leaves NOTICE_WHY empty); a notice would be
-  # wrong then. The notice only APPENDS one line to the original; it never
+  # the CLI is not installed, timed out, or exited with an error. A merely
+  # empty completion — clean exit, no text — stays silent (llm_notice_why
+  # leaves NOTICE_WHY empty); a notice would be wrong then. The notice only APPENDS one line to the original; it never
   # suppresses content, so the fail-open contract still holds.
   notified="$BUF_ROOT/$sid.notified"
-  TIMEOUT_HINT="raise CLAUDISH_TIMEOUT or set CLAUDISH_MODEL to a smaller model"
+  TIMEOUT_HINT="raise CLAUDISH_TIMEOUT, or set CLAUDISH_EFFORT=low / CLAUDISH_MODEL to a faster model"
   llm_notice_why
   if [ "$NOTICE" = "1" ] && [ ! -e "$notified" ] && [ -n "$NOTICE_WHY" ]; then
     : > "$notified" 2>/dev/null || true
@@ -372,30 +374,15 @@ if [ -z "$rewrite" ]; then
   pass_through
 fi
 
-# ---- once-per-session oauth caution ---------------------------------------
-# oauth mode bills rewrites to the user's Claude subscription through an
-# unofficial mechanism, so the FIRST successful rewrite of a session says so
-# on screen (failures already surface through the notice above). The marker
-# is shared with rewrite-md.sh — one caution per session, not one per hook.
-oauth_note=""
-oauth_noted="$BUF_ROOT/$sid.oauth-noted"
-if [ "$NOTICE" = "1" ] && [ ! -e "$oauth_noted" ]; then
-  _onote="$(llm_oauth_note 2>/dev/null)"
-  if [ -n "$_onote" ]; then
-    : > "$oauth_noted" 2>/dev/null || true
-    oauth_note=$'\n\n'"⚠️ claudish-to-english: $_onote. Shown once per session; set CLAUDISH_NOTICE=0 to silence."
-  fi
-fi
-
 # ---- build displayContent for the final chunk ----------------------------
 out="$BUF_ROOT/$sid.$mid.out"
 if [ "$MODE" = "replace" ]; then
   # Everything before was suppressed; show only the rewrite.
-  printf '%s%s' "$rewrite" "$oauth_note" > "$out"
+  printf '%s' "$rewrite" > "$out"
 else
   # append: keep the streamed original (final chunk = its last delta),
   # then append the simplified version.
-  { cat "$final_part" 2>/dev/null; printf '%s' "$SEP"; printf '%s' "$rewrite"; printf '%s' "$oauth_note"; } > "$out"
+  { cat "$final_part" 2>/dev/null; printf '%s' "$SEP"; printf '%s' "$rewrite"; } > "$out"
 fi
 cleanup
 emit "$out"

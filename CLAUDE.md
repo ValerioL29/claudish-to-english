@@ -1,10 +1,12 @@
 # claudish-to-english
 
 A Claude Code plugin: a `MessageDisplay` hook shows a plain-language rewrite of
-each assistant message, produced by a local or remote LLM. **Display-only** —
+each assistant message, produced by a headless coding-agent CLI (`codex exec`,
+`agy -p`, or `opencode run`). Simplified personal fork: CLI providers only, and
+only two output languages (English, 简体中文). **Display-only** —
 Claude's reasoning and the saved transcript always keep the original text.
 
-Plain bash + `jq` + `curl`. No build, no test suite, no dependencies to install.
+Plain bash + `jq`. No build, no test suite, no dependencies to install.
 
 `CONTRIBUTING.md` is the full version of this file; it is the source of truth if
 the two ever disagree.
@@ -17,8 +19,8 @@ the two ever disagree.
 | `rewrite-md.sh` | `PostToolUse` hook — rewrites Markdown files (opt-in, off by default) |
 | `claudish-ctl.sh` | backs `/claudish`; writes the `~/.claude/claudish-*` flag files, prints the dashboard |
 | `session-notice.sh` | `SessionStart` hook — warns that flag files from an earlier session are still active |
-| `providers.sh` | provider layer (ollama / anthropic / openai / codex). Sourced by both hooks |
-| `lang.sh` | output-language resolver + the sanitiser for untrusted config values. Sourced by both hooks |
+| `providers.sh` | provider layer (codex / agy / opencode, all headless CLIs). Sourced by both hooks |
+| `lang.sh` | `en`/`zh` resolver; anything else normalises to empty, which is also the sanitiser. Sourced by both hooks |
 | `commands/claudish.md` | the `/claudish` slash command |
 | `hooks/hooks.json` | wires the three hooks |
 
@@ -62,7 +64,7 @@ Also run `bash -n` on every script touched. `CLAUDISH_DEBUG=1` logs to
 
 To exercise the plugin in a real session, point a scratch project's
 `.claude/settings.json` at the checkout **and** set
-`"enabledPlugins": { "claudish-to-english@gvzdv-plugins": false }` — otherwise
+`"enabledPlugins": { "claudish-to-english@valeriol29-plugins": false }` — otherwise
 the installed copy and the working copy both fire on the same message and
 whichever writes last wins.
 
@@ -90,9 +92,9 @@ with `Shell command permission check failed`. It has regressed twice; do not
 
 **Untrusted config values go through `lang.sh`.** The `language` key comes from
 `.claude/settings*.json`, which travels with a repository and is not necessarily
-the local user's text. Route it through `_claudish_lang_clean` (folds control
-characters to spaces, caps at three words / 30 codepoints) before it reaches a
-prompt or the screen. Never print a raw config value.
+the local user's text. Route it through `_claudish_lang_clean`, which only ever
+returns `English`, `简体中文`, or empty, before it reaches a prompt or the screen.
+Never print a raw config value.
 
 **Comments are load-bearing.** This codebase explains *why*, not *what*, and the
 header comment in each script is its real documentation. Match that density and
