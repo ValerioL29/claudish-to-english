@@ -10,6 +10,7 @@
   "homepage": "https://github.com/ValerioL29/claudish-to-english#readme",
   "repository": "https://github.com/ValerioL29/claudish-to-english",
   "license": "MIT",
+  "skills": ["./plugins/claudish-to-english/skills/"],
   "keywords": [
     "codex",
     "opencode",

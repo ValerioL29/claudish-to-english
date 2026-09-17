@@ -40,9 +40,10 @@ SemVer at `0.x`, based on what is actually under `## [Unreleased]`:
 Never hide a feature in a patch. State the version and the reason in one line
 before proceeding.
 
-### 3. Edit the two files
+### 3. Edit the three files
 
-Only these two carry a version. `marketplace.json` does not pin one — leave it.
+The changelog and both plugin manifests carry the version. Marketplace
+manifests do not pin one; leave them unchanged.
 
 **`CHANGELOG.md`** — three edits:
 
@@ -62,7 +63,9 @@ While you are in the file, tidy the prose of the entries if they read like PR
 descriptions rather than changelog entries, but do not change their meaning or
 drop anything.
 
-**`.claude-plugin/plugin.json`** — bump `"version"`. Edit the string in place so
+**`.claude-plugin/plugin.json`** and
+**`plugins/claudish-to-english/.codex-plugin/plugin.json`** — bump `"version"`
+to the same value. Edit the strings in place so
 key order and formatting survive; do not round-trip the file through a JSON
 serialiser.
 
@@ -70,7 +73,11 @@ serialiser.
 
 ```bash
 jq empty .claude-plugin/plugin.json && jq -r .version .claude-plugin/plugin.json
-for f in *.sh; do bash -n "$f" || echo "FAIL $f"; done
+jq empty plugins/claudish-to-english/.codex-plugin/plugin.json
+node tests/check.mjs
+for f in *.sh plugins/claudish-to-english/skills/agentish-rewriter/scripts/*.sh; do
+  bash -n "$f" || exit 1
+done
 ```
 
 Then confirm every `## [x]` heading has a matching `[x]:` ref and there are no
@@ -88,7 +95,7 @@ PY
 ```
 
 `jq -r .version` must equal the new heading. Show the full `git diff` — it should
-touch exactly two files.
+touch exactly three files.
 
 ### 5. Branch, commit, PR
 
@@ -101,7 +108,7 @@ gh pr create --base main \
   --body-file <a file you write>
 ```
 
-The PR body should state why MINOR or PATCH, list the two changed files, and
+The PR body should state why MINOR or PATCH, list the three changed files, and
 summarise what the release ships (drawn from the changelog section).
 
 ### 6. Stop

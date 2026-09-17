@@ -1,0 +1,20 @@
+{
+  "name": "claudish-to-english",
+  "version": "0.9.0",
+  "description": "Rewrite answers and Markdown in plain language using a model chosen by the user.",
+  "author": {
+    "name": "ValerioL29"
+  },
+  "license": "MIT",
+  "repository": "https://github.com/ValerioL29/claudish-to-english",
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Claudish to English",
+    "shortDescription": "Rewrite answers and documents with a chosen model.",
+    "longDescription": "Agentish Rewriter delegates plain-language rewrites to the requested model, preserving facts, qualifications, code, and Markdown structure.",
+    "developerName": "ValerioL29",
+    "category": "Productivity",
+    "capabilities": ["Interactive", "Write"],
+    "defaultPrompt": ["Use $agentish-rewriter to rewrite my last answer with the model I specify."]
+  }
+}

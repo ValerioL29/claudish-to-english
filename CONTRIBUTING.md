@@ -1,8 +1,9 @@
 # Contributing
 
-Thanks for helping out. This plugin is a handful of bash scripts wired to Claude
-Code hooks, so contributing is mostly: change a script, prove it still fails
-open, add a changelog entry.
+The Claude hooks share a CLI runner with the portable Agentish Rewriter skill.
+Codex loads the package under `plugins/claudish-to-english/`; OpenCode uses the
+adapters under `opencode/`. Keep changes compatible with each caller and add a
+changelog entry.
 
 - [Ground rules](#ground-rules)
 - [Setting up](#setting-up)
@@ -22,9 +23,10 @@ original text on screen. A display hook that can swallow or corrupt an
 assistant's answer is worse than no plugin at all. If you are unsure whether
 your change preserves this, say so in the PR and it will get checked.
 
-**The plugin is display-only.** Claude's own reasoning and the saved transcript
+**The Claude display hook is display-only.** Claude's own reasoning and the saved transcript
 always keep the original text. Nothing you add should change what Claude
-actually said, or write to the transcript.
+actually said, or write to the transcript. On-demand rewrites return a new
+answer or save a document; they do not replace existing conversation entries.
 
 **Contributors do not bump the version and do not create tags.** Add your entry
 under `## [Unreleased]` in `CHANGELOG.md` and leave it there. The maintainer
@@ -66,13 +68,23 @@ way to lose an afternoon.
 
 ## Testing a change
 
-There is no test suite. Verify by running the hook directly with a synthetic
-payload — every hook reads JSON on stdin and writes JSON on stdout.
+Run `node tests/check.mjs` for the offline integration check. It uses temporary
+CLI doubles to verify model selection, input transport, error handling, and
+both hooks without using credentials or invoking a paid model. The OpenCode
+adapters are checked against their native registration interfaces. Real model
+output and native sub-agent execution still need separate live verification.
+
+You can also run hooks with synthetic payloads; they read JSON on stdin and
+write JSON on stdout.
 
 **Syntax check everything you touched:**
 
 ```bash
-for f in *.sh; do bash -n "$f" || echo "FAIL $f"; done
+for f in *.sh plugins/claudish-to-english/skills/agentish-rewriter/scripts/*.sh; do
+  bash -n "$f" || exit 1
+done
+node --check opencode/claudish-to-english.mjs
+node --check opencode/claudish-to-english-v1.mjs
 ```
 
 **Drive the display hook end to end.** Point `TMPDIR` at a scratch directory and
@@ -166,8 +178,11 @@ value at three words / 30 codepoints. Do not print a raw config value.
 
 ### Both hooks share `providers.sh` and `lang.sh`
 
-`rewrite.sh` and `rewrite-md.sh` source both. A change to either affects the
-Markdown hook too, and a missing file must degrade rather than stop rewrites.
+`rewrite.sh` and `rewrite-md.sh` source both; `claudish-ctl.sh` also sources the
+provider settings for its dashboard. The root `providers.sh` loads the canonical
+runner in `plugins/claudish-to-english/skills/agentish-rewriter/scripts/` so the
+Codex package is self-contained. A change affects the on-demand runner and both
+hooks. A missing shared file must leave the hooks' original content intact.
 
 ---
 
@@ -195,8 +210,9 @@ Versioning is [SemVer](https://semver.org) at `0.x`:
   env var.
 - **PATCH** for fixes only, nothing new. (0.7.1.)
 
-Only two files carry a version: `.claude-plugin/plugin.json` and
-`CHANGELOG.md`. `marketplace.json` does not pin one.
+Three files carry the release version: `.claude-plugin/plugin.json`,
+`plugins/claudish-to-english/.codex-plugin/plugin.json`, and `CHANGELOG.md`.
+The marketplace manifests do not pin one.
 
 With Claude Code, run `/release <version>` and it does all of this. By hand:
 
@@ -210,7 +226,7 @@ git switch -c release/0.9.0 origin/main
 #    [Unreleased]: https://github.com/ValerioL29/claudish-to-english/compare/v0.9.0...HEAD
 #    [0.9.0]:      https://github.com/ValerioL29/claudish-to-english/compare/v0.8.0...v0.9.0
 
-# 4. .claude-plugin/plugin.json: bump "version"
+# 4. Both Claude and Codex plugin.json files: bump "version" together
 
 # 5. commit, push, PR, review, merge
 git commit -am "chore: v0.9.0 — <one-line summary>"

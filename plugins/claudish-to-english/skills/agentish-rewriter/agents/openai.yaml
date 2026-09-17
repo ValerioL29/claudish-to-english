@@ -1,0 +1,4 @@
+interface:
+  display_name: "Agentish Rewriter"
+  short_description: "Rewrite answers or Markdown with a chosen model"
+  default_prompt: "Use $agentish-rewriter to rewrite my last answer using the model I specify."

@@ -6,7 +6,12 @@ each assistant message, produced by a headless coding-agent CLI (`codex exec`,
 only two output languages (English, 简体中文). **Display-only** —
 Claude's reasoning and the saved transcript always keep the original text.
 
-Plain bash + `jq`. No build, no test suite, no dependencies to install.
+Codex and OpenCode also expose the on-demand `agentish-rewriter` skill, with a
+user-selected model. Its canonical files live under
+`plugins/claudish-to-english/skills/agentish-rewriter/`.
+
+Plain bash + `jq`, with small OpenCode JavaScript adapters. No build or runtime
+dependencies to install. Run `node tests/check.mjs` for offline integration checks.
 
 `CONTRIBUTING.md` is the full version of this file; it is the source of truth if
 the two ever disagree.
@@ -19,7 +24,9 @@ the two ever disagree.
 | `rewrite-md.sh` | `PostToolUse` hook — rewrites Markdown files (opt-in, off by default) |
 | `claudish-ctl.sh` | backs `/claudish`; writes the `~/.claude/claudish-*` flag files, prints the dashboard |
 | `session-notice.sh` | `SessionStart` hook — warns that flag files from an earlier session are still active |
-| `providers.sh` | provider layer (codex / agy / opencode, all headless CLIs). Sourced by both hooks |
+| `providers.sh` | compatibility entry point to the skill's shared CLI provider layer |
+| `plugins/claudish-to-english/` | self-contained Codex plugin, shared skill and provider scripts |
+| `opencode/` | OpenCode 2 and 1 command adapters |
 | `lang.sh` | `en`/`zh` resolver; anything else normalises to empty, which is also the sanitiser. Sourced by both hooks |
 | `commands/claudish.md` | the `/claudish` slash command |
 | `hooks/hooks.json` | wires the three hooks |
@@ -110,6 +117,6 @@ a follow-up. Use `### Added` / `### Changed` / `### Fixed`, and say *why*, not
 just what.
 
 To cut a release, use the `/release` skill in `.claude/skills/release/`. SemVer
-at `0.x`: MINOR for a new user-facing feature, PATCH for fixes only. Only
-`plugin.json` and `CHANGELOG.md` carry a version. The tag goes on the **merge**
+at `0.x`: MINOR for a new user-facing feature, PATCH for fixes only. The Claude
+and Codex plugin manifests and `CHANGELOG.md` carry the version. The tag goes on the **merge**
 commit, never the bump commit.

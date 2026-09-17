@@ -7,10 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-This fork (ValerioL29/claudish-to-english) trims the plugin to what one person
-actually runs. Both changes below are deliberate simplifications, not bug fixes.
+### Added
+- **Codex and OpenCode plugins with Agentish Rewriter.** Rewrite the previous
+  answer or a Markdown document through the user-selected model. Use native
+  sub-agents when the host can select that model, with the existing headless
+  CLI providers as a fallback. The skill is also available in Claude Code.
+  File rewrites default to a sibling, and failed calls leave the source intact.
+  Codex uses its skill invocation; OpenCode registers `/agentish-rewriter` with
+  separate adapters for versions 2 and 1. Automatic display hooks remain
+  Claude-specific.
+- **An offline integration check** for command registration, model forwarding,
+  large input, provider errors, timeouts, and compatibility with the Claude hooks.
 
 ### Changed
+- Share the provider runner with the portable skill. Codex and OpenCode receive
+  prompts through stdin so Markdown documents do not exceed command-line
+  argument limits. OpenCode JSON output separates prose from progress and errors.
 - **Providers are headless CLIs only: `codex exec` (default), `agy -p`, and
   `opencode run`.** Each is a coding-agent CLI that is already logged in on the
   machine, so the plugin needs no API keys, base URLs, or local model server,
