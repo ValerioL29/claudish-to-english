@@ -1,5 +1,20 @@
 import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
+import { execFile } from "node:child_process";
+
+// The Bash engine owns configuration and fail-open behavior. Bound its output
+// and lifetime here too, so a broken child cannot stall answer completion.
+function automaticRewrite(text, cwd) {
+  if (process.env.CLAUDISH_INTERNAL === "1" || typeof text !== "string") return Promise.resolve("");
+  const hook = fileURLToPath(new URL("../plugins/claudish-to-english/hooks/automatic.sh", import.meta.url));
+  return new Promise((resolve) => {
+    const child = execFile("bash", [hook, "opencode"], {
+      timeout: 60000, killSignal: "SIGKILL", maxBuffer: 8 * 1024 * 1024,
+    }, (error, stdout) => resolve(error ? "" : stdout));
+    child.stdin.on("error", () => {}); // A missing engine may close stdin early.
+    child.stdin.end(JSON.stringify({ text, cwd }));
+  });
+}
 
 // Register an on-demand command in the parent session so “last answer” remains
 // available. The skill delegates only after capturing the source and model.
@@ -36,15 +51,28 @@ export default {
         },
       });
     });
+    // OpenCode 2.0.2 has no completed-text transform. session.synthetic queues
+    // future model input; it cannot append a display-only answer (see README).
   },
 };
 
-export async function legacyPlugin() {
+export async function legacyPlugin({ directory, client } = {}) {
   const definition = await rewriteCommand();
   return {
     config: async (config) => {
       config.command ??= {};
       config.command["agentish-rewriter"] ??= definition;
+    },
+    "experimental.text.complete": async (input, output) => {
+      if (process.env.CLAUDISH_INTERNAL === "1") return;
+      try {
+        // Native sub-agent results must retain the explicitly selected model's
+        // output; only the parent session's answer gets an automatic rewrite.
+        const info = await client.session.get({ path: { id: input.sessionID } });
+        if (!info.data || info.data.parentID) return;
+        const rewrite = await automaticRewrite(output.text, directory);
+        if (rewrite) output.text += rewrite;
+      } catch { /* Fail open on session lookup and rewrite errors. */ }
     },
   };
 }

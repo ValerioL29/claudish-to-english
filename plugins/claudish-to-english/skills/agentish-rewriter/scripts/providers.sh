@@ -88,6 +88,9 @@ Do not run commands, read files, or use any tools: answer directly from the text
 
 $_user"
 
+  # Nested workers must not trigger another automatic rewrite.
+  export CLAUDISH_INTERNAL=1
+
   # Codex and OpenCode accept stdin, avoiding the argv size limit on Markdown
   # documents. Each gets only this prompt, never the hook's consumed stdin.
   # Backgrounded because stock macOS has no timeout(1).

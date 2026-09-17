@@ -6,7 +6,9 @@ each assistant message, produced by a headless coding-agent CLI (`codex exec`,
 only two output languages (English, 简体中文). **Display-only** —
 Claude's reasoning and the saved transcript always keep the original text.
 
-Codex and OpenCode also expose the on-demand `agentish-rewriter` skill, with a
+Codex has an automatic append-only `Stop` hook. OpenCode 1 appends rewrites
+through its completed-text hook; OpenCode 2.0.2 has on-demand support only.
+All hosts expose the on-demand `agentish-rewriter` skill, with a
 user-selected model. Its canonical files live under
 `plugins/claudish-to-english/skills/agentish-rewriter/`.
 
@@ -20,14 +22,14 @@ the two ever disagree.
 
 | File | Role |
 |---|---|
-| `rewrite.sh` | `MessageDisplay` hook — the main event. Buffers streamed chunks, rewrites on the final one |
+| `rewrite.sh` | Claude entry point to the shared `plugins/claudish-to-english/hooks/rewrite.sh` engine |
 | `rewrite-md.sh` | `PostToolUse` hook — rewrites Markdown files (opt-in, off by default) |
 | `claudish-ctl.sh` | backs `/claudish`; writes the `~/.claude/claudish-*` flag files, prints the dashboard |
 | `session-notice.sh` | `SessionStart` hook — warns that flag files from an earlier session are still active |
 | `providers.sh` | compatibility entry point to the skill's shared CLI provider layer |
 | `plugins/claudish-to-english/` | self-contained Codex plugin, shared skill and provider scripts |
-| `opencode/` | OpenCode 2 and 1 command adapters |
-| `lang.sh` | `en`/`zh` resolver; anything else normalises to empty, which is also the sanitiser. Sourced by both hooks |
+| `opencode/` | OpenCode command adapters and the v1 automatic completion hook |
+| `lang.sh` | entry point to the shared `en`/`zh` resolver; anything else normalises to empty, which is also the sanitiser. Sourced by both hooks |
 | `commands/claudish.md` | the `/claudish` slash command |
 | `hooks/hooks.json` | wires the three hooks |
 

@@ -1,6 +1,6 @@
 // Offline integration check: node tests/check.mjs
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, writeFileSync, chmodSync, rmSync, mkdirSync, existsSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync, chmodSync, rmSync, mkdirSync, existsSync, cpSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -11,7 +11,10 @@ import pluginV2 from "../opencode/claudish-to-english.mjs";
 const root = fileURLToPath(new URL("../", import.meta.url));
 const scratch = mkdtempSync(join(tmpdir(), "agentish-check-"));
 try {
-  const hooks = await plugin();
+  let sessionInfo = {};
+  const hooks = await plugin({ directory: scratch, client: {
+    session: { get: async () => ({ data: sessionInfo }) },
+  } });
   const config = { command: { existing: { template: "Keep me" } } };
   await hooks.config(config);
   const command = config.command["agentish-rewriter"];
@@ -54,7 +57,7 @@ try {
 const fs = require("node:fs");
 const args = process.argv.slice(2);
 const input = fs.readFileSync(0, "utf8");
-fs.writeFileSync(process.env.MOCK_CAPTURE, JSON.stringify({ args, input, cwd: process.cwd() }));
+fs.writeFileSync(process.env.MOCK_CAPTURE, JSON.stringify({ args, input, cwd: process.cwd(), internal: process.env.CLAUDISH_INTERNAL }));
 if (process.env.MOCK_MODE === "fail") { console.error("unsupported model"); process.exit(3); }
 if (process.env.MOCK_MODE === "timeout") { setInterval(() => {}, 1000); }
 else if (args.includes("--format")) {
@@ -94,6 +97,7 @@ else if (args.includes("--format")) {
     assert.equal(result.status, 0, result.stderr);
     assert.equal(result.stdout, "Clear prose.\n");
     const captured = JSON.parse(readFileSync(env.MOCK_CAPTURE));
+    assert.equal(captured.internal, "1");
     const flag = provider === "agy" ? "--model" : "-m";
     assert.equal(captured.args[captured.args.indexOf(flag) + 1], "exact/model#variant");
     const prompt = provider === "agy" ? captured.args.at(-1) : captured.input;
@@ -135,7 +139,71 @@ else if (args.includes("--format")) {
     if (mode === "fail") assert.equal(existsSync(join(scratch, "file.plain.md")), false);
   }
   assert.equal(readFileSync(join(scratch, "file.plain.md"), "utf8"), "---\ntitle: Example\n---\n\nClear prose.\n");
-  console.log("PASS: plugin registration, model selection, large input, failures, timeout, and Claude hooks");
+
+  const automatic = join(packageRoot, "hooks/automatic.sh");
+  const stop = { hook_event_name: "Stop", last_assistant_message: "Original prose.", cwd: scratch };
+  const auto = (data, overrides = {}) => run(automatic, ["codex"], JSON.stringify(data), {
+    CLAUDISH_PROVIDER: "codex", ...overrides,
+  });
+  // A persisted replace setting cannot suppress an already displayed answer.
+  writeFileSync(env.CLAUDISH_MODE_FILE, "replace");
+  const notice = JSON.parse(auto(stop).stdout);
+  assert.ok(notice.systemMessage.includes("Clear prose."));
+  assert.ok(!notice.systemMessage.includes("Original prose."));
+  assert.deepEqual(Object.keys(notice), ["systemMessage"]); // Never continue the turn.
+  for (const overrides of [{ MOCK_MODE: "fail" }, { MOCK_MODE: "empty" }, { CLAUDISH_INTERNAL: "1" }, { CLAUDISH_ENABLED: "0" }, { CLAUDISH_MIN_CHARS: "200" }]) {
+    const result = auto(stop, overrides);
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.stdout, "");
+  }
+  for (const data of [{}, { ...stop, stop_hook_active: true }, { ...stop, last_assistant_message: "<!-- claudish:original -->\nAlready clear." }]) {
+    assert.equal(auto(data).stdout, "");
+  }
+  assert.equal(run(automatic, ["codex"], "not json").stdout, "");
+  assert.equal(run(automatic, ["opencode"], JSON.stringify({ text: "Original prose." }), { CLAUDISH_STUB: "1" }).status, 0);
+  const translated = JSON.parse(auto(stop, { CLAUDISH_LANG: "zh", CLAUDISH_STYLE: "tldr" }).stdout);
+  assert.ok(translated.systemMessage.includes("摘要"));
+  assert.ok(JSON.parse(readFileSync(env.MOCK_CAPTURE)).input.includes("简体中文"));
+  assert.equal(auto(stop, { MOCK_MODE: "timeout", CLAUDISH_TIMEOUT: "1" }).stdout, "");
+  assert.equal(run(join(root, "rewrite.sh"), [], payload, { CLAUDISH_INTERNAL: "1" }).stdout, "");
+  assert.equal(run(join(root, "rewrite-md.sh"), [], mdPayload, { CLAUDISH_INTERNAL: "1", CLAUDISH_MD_DIR: scratch }).stdout, "");
+
+  // An installed Codex package cannot depend on files outside its root.
+  const detached = join(scratch, "detached plugin");
+  cpSync(packageRoot, detached, { recursive: true });
+  const definition = JSON.parse(readFileSync(join(detached, "hooks/hooks.json"))).hooks.Stop[0].hooks[0];
+  const installed = spawnSync("bash", ["-c", definition.command], {
+    input: JSON.stringify(stop), encoding: "utf8", timeout: 10000,
+    env: { ...env, PLUGIN_ROOT: detached, CLAUDISH_STUB: "1" },
+  });
+  assert.equal(installed.status, 0, installed.stderr);
+  assert.ok(JSON.parse(installed.stdout).systemMessage.includes("STUB-SIMPLIFIED"));
+
+  // Exercise the OpenCode 1 completion hook through its real child process.
+  const savedEnv = { ...process.env };
+  Object.assign(process.env, env, { CLAUDISH_PROVIDER: "codex" });
+  try {
+    const output = { text: "Original prose." };
+    await hooks["experimental.text.complete"]({}, output);
+    assert.ok(output.text.startsWith("Original prose."));
+    assert.ok(output.text.endsWith("Clear prose."));
+    process.env.MOCK_MODE = "fail";
+    const unchanged = { text: "Original prose." };
+    await hooks["experimental.text.complete"]({}, unchanged);
+    assert.equal(unchanged.text, "Original prose.");
+    process.env.MOCK_MODE = "success";
+    sessionInfo = { parentID: "parent-session" };
+    await hooks["experimental.text.complete"]({}, unchanged);
+    assert.equal(unchanged.text, "Original prose.");
+    sessionInfo = {};
+    process.env.CLAUDISH_INTERNAL = "1";
+    await hooks["experimental.text.complete"]({}, unchanged);
+    assert.equal(unchanged.text, "Original prose.");
+  } finally {
+    for (const key of Object.keys(process.env)) if (!(key in savedEnv)) delete process.env[key];
+    Object.assign(process.env, savedEnv);
+  }
+  console.log("PASS: registration, providers, recursion guards, failures, Claude hooks, and automatic Codex/OpenCode adapters");
 } finally {
   rmSync(scratch, { recursive: true, force: true });
 }

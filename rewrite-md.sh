@@ -59,6 +59,7 @@
 #                                     out, is missing a key or model (default 1)
 # ---------------------------------------------------------------------------
 set -uo pipefail
+[ "${CLAUDISH_INTERNAL:-0}" != 1 ] || exit 0
 
 ENABLED="${CLAUDISH_ENABLED:-1}"
 # Runtime kill switch: env is frozen at session launch, so a hotkey or script

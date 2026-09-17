@@ -1,6 +1,8 @@
 # Contributing
 
-The Claude hooks share a CLI runner with the portable Agentish Rewriter skill.
+Claude and Codex hooks and the OpenCode 1 adapter share a rewrite engine and
+CLI runner with the portable Agentish Rewriter skill. OpenCode 2.0.2 supports
+the on-demand command only.
 Codex loads the package under `plugins/claudish-to-english/`; OpenCode uses the
 adapters under `opencode/`. Keep changes compatible with each caller and add a
 changelog entry.
@@ -25,8 +27,9 @@ your change preserves this, say so in the PR and it will get checked.
 
 **The Claude display hook is display-only.** Claude's own reasoning and the saved transcript
 always keep the original text. Nothing you add should change what Claude
-actually said, or write to the transcript. On-demand rewrites return a new
-answer or save a document; they do not replace existing conversation entries.
+actually said, or write to the transcript. The Codex Stop hook likewise leaves
+model context unchanged. OpenCode 1 retains the original and appends the rewrite to the saved text part. On-demand
+rewrites return a new answer or save a document.
 
 **Contributors do not bump the version and do not create tags.** Add your entry
 under `## [Unreleased]` in `CHANGELOG.md` and leave it there. The maintainer
@@ -70,7 +73,7 @@ way to lose an afternoon.
 
 Run `node tests/check.mjs` for the offline integration check. It uses temporary
 CLI doubles to verify model selection, input transport, error handling, and
-both hooks without using credentials or invoking a paid model. The OpenCode
+automatic adapters without using credentials or invoking a paid model. The OpenCode
 adapters are checked against their native registration interfaces. Real model
 output and native sub-agent execution still need separate live verification.
 
@@ -80,7 +83,7 @@ write JSON on stdout.
 **Syntax check everything you touched:**
 
 ```bash
-for f in *.sh plugins/claudish-to-english/skills/agentish-rewriter/scripts/*.sh; do
+for f in *.sh plugins/claudish-to-english/hooks/*.sh plugins/claudish-to-english/skills/agentish-rewriter/scripts/*.sh; do
   bash -n "$f" || exit 1
 done
 node --check opencode/claudish-to-english.mjs
@@ -127,7 +130,7 @@ places. Miss one and the failure is silent:
 
 | File | What it does with the value |
 |---|---|
-| `rewrite.sh` | picks the system prompt and the on-screen label |
+| `plugins/claudish-to-english/hooks/rewrite.sh` | picks the system prompt and the on-screen label |
 | `claudish-ctl.sh` | `current_style`, `style_source`, the dashboard, `/claudish style` validation and its error text |
 | `session-notice.sh` | warns at session start that a persisted style is still active |
 | `commands/claudish.md` | `description` and `argument-hint` |
@@ -182,7 +185,14 @@ value at three words / 30 codepoints. Do not print a raw config value.
 provider settings for its dashboard. The root `providers.sh` loads the canonical
 runner in `plugins/claudish-to-english/skills/agentish-rewriter/scripts/` so the
 Codex package is self-contained. A change affects the on-demand runner and both
-hooks. A missing shared file must leave the hooks' original content intact.
+hooks. The canonical display engine and language resolver live under
+`plugins/claudish-to-english/hooks/`; root scripts preserve Claude's entry points.
+`automatic.sh` adapts completed text to the engine and returns only the appended
+suffix. The Codex variant wraps it in `systemMessage` and never blocks or
+continues a turn. A missing shared file must leave original content intact.
+
+Set `CLAUDISH_INTERNAL=1` for nested worker processes. Every automatic adapter
+must honor it so a rewrite does not recursively rewrite its own answer.
 
 ---
 

@@ -76,9 +76,10 @@ source cannot fit in the worker's context, report that limitation instead of
 silently truncating it.
 
 For an answer, return only the rewritten answer, with no model label or extra
-commentary. Leave the earlier conversation entry intact. In Claude Code, prefix
-the final answer with `<!-- claudish:original -->` so the display hook does not
-rewrite it again; that hook strips the marker. Omit this marker in other hosts.
+commentary. Leave the earlier conversation entry intact. Prefix
+the final answer with `<!-- claudish:original -->` so automatic hooks skip the
+already rewritten result. Claude strips the marker; other hosts retain it as
+a Markdown comment.
 
 For `file.md`, write `file.plain.md` by default and restore the original YAML
 frontmatter verbatim. Use another destination or overwrite the source only when

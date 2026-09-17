@@ -1,7 +1,7 @@
 {
   "name": "claudish-to-english",
   "version": "0.9.0",
-  "description": "Rewrite answers and Markdown in plain language using a model chosen by the user.",
+  "description": "Automatically append plain-language rewrites and rewrite answers or Markdown on demand using a model chosen by the user.",
   "author": {
     "name": "ValerioL29"
   },
@@ -11,7 +11,7 @@
   "interface": {
     "displayName": "Claudish to English",
     "shortDescription": "Rewrite answers and documents with a chosen model.",
-    "longDescription": "Agentish Rewriter delegates plain-language rewrites to the requested model, preserving facts, qualifications, code, and Markdown structure.",
+    "longDescription": "Automatically append a plain-language rewrite after each answer using a trusted Stop hook. Agentish Rewriter also delegates on-demand answer and Markdown rewrites to the requested model.",
     "developerName": "ValerioL29",
     "category": "Productivity",
     "capabilities": ["Interactive", "Write"],
