@@ -7,10 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-This fork (ValerioL29/claudish-to-english) trims the plugin to what one person
-actually runs. Both changes below are deliberate simplifications, not bug fixes.
+### Added
+- **Codex and OpenCode plugins with Agentish Rewriter.** Rewrite the previous
+  answer or a Markdown document through the user-selected model. Use native
+  sub-agents when the host can select that model, with the existing headless
+  CLI providers as a fallback. The skill is also available in Claude Code.
+  File rewrites default to a sibling, and failed calls leave the source intact.
+  Codex uses its skill invocation; OpenCode registers `/agentish-rewriter` with
+  separate adapters for versions 2 and 1.
+- **Automatic rewrites in Codex and OpenCode 1.** Codex appends a `Stop` hook
+  message without changing model context. OpenCode 1 appends to completed text.
+  Both retain the original text and reuse existing style/language/model settings.
+  OpenCode includes saved rewrites in later context. These adapters support
+  append mode and fail silently, leaving the original intact. OpenCode 2.0.2
+  exposes no completed-text/display transform and retains on-demand rewriting.
+- **An offline integration check** for command registration, model forwarding,
+  large input, provider errors, timeouts, recursion prevention, automatic host
+  adapters, and compatibility with the Claude hooks.
 
 ### Changed
+- Share the provider runner with the portable skill. Codex and OpenCode receive
+  prompts through stdin so Markdown documents do not exceed command-line
+  argument limits. OpenCode JSON output separates prose from progress and errors.
+- Package the display engine and language resolver with Codex, retaining the
+  original Claude entry points. Guard nested CLI workers against automatic
+  rewriting.
 - **Providers are headless CLIs only: `codex exec` (default), `agy -p`, and
   `opencode run`.** Each is a coding-agent CLI that is already logged in on the
   machine, so the plugin needs no API keys, base URLs, or local model server,

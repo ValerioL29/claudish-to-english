@@ -1,0 +1,389 @@
+#!/usr/bin/env bash
+# ---------------------------------------------------------------------------
+# MessageDisplay LLM rewrite hook  (buffer-to-final, fail-open)
+#
+# Claude Code fires the MessageDisplay event once PER STREAMED CHUNK of an
+# assistant message. Each fire is a separate process and carries:
+#   .message_id  groups chunks of one message
+#   .index       chunk order (0,1,2,...)
+#   .final       true on the last chunk
+#   .delta       this chunk's text fragment (NOT cumulative)
+#
+# To rewrite a whole message we buffer every .delta to disk (keyed by
+# message_id) and only call the LLM on the final chunk, once the whole
+# message is known.
+#
+# On the final chunk we also read the ORIGINAL USER QUESTION from
+# .transcript_path (the last real user message) and pass it to the model as
+# CONTEXT ONLY — it helps the rewrite stay on-topic. The model is told never
+# to rewrite, answer, or repeat the question; only the assistant message is
+# rewritten. Missing/unreadable transcript -> no context, still rewrites.
+#
+# Every rewrite is also told WHOSE voice it is reading: the input is one turn of
+# a conversation, so "I" is the assistant and "you" is the user. That framing is
+# added even over CLAUDISH_PROMPT_FILE, because it is a fact about the input
+# rather than a style choice.
+#
+# FAIL-OPEN CONTRACT: on ANY problem (disabled, no jq, parse error, LLM down,
+# timeout, empty rewrite) we emit nothing and exit 0, which leaves Claude's
+# ORIGINAL text on screen. A display hook must never be able to swallow the
+# assistant's answer.
+#
+# Config (all via env, with safe defaults):
+#   CLAUDISH_ENABLED   1|0            master switch (default 1)
+#   CLAUDISH_OFF_FILE  <path>         flag file checked per message; when it
+#                                          exists, rewrites pause (default
+#                                          ~/.claude/claudish-off) — lets a
+#                                          hotkey/script toggle mid-session
+#   CLAUDISH_MODE      append|replace display strategy (default append)
+#   CLAUDISH_STYLE     tldr|5y|caveman  rewrite-style preset replacing the base
+#                                          prompt: "tldr" = a clearly shorter
+#                                          summary; "5y" = explain like I'm
+#                                          five; "caveman" = blunt caveman
+#                                          speak. Unset/other = the default
+#                                          plain-language rewrite. A usable
+#                                          CLAUDISH_PROMPT_FILE wins over any
+#                                          style (custom prompt > style >
+#                                          built-in); the language line still
+#                                          applies. Switch it live with
+#                                          /claudish style (a flag file,
+#                                          CLAUDISH_STYLE_FILE, overrides this)
+#   CLAUDISH_PROMPT_FILE <path>       file holding a replacement rewrite prompt
+#                                          (whole prompt, not merged; empty or
+#                                          unreadable -> built-in default,
+#                                          overriding any CLAUDISH_STYLE)
+#   CLAUDISH_LANG      en|zh          language to rewrite into (English or
+#                                          简体中文 — the only two here; any
+#                                          usual spelling works). Unset falls
+#                                          back to the session's `language`
+#                                          setting from .claude/settings*.json
+#                                          (the same key Claude Code answers
+#                                          in); with neither set, the rewrite
+#                                          keeps the language of the message it
+#                                          rewrites. Set it EMPTY to ignore the
+#                                          settings key. See lang.sh
+#   CLAUDISH_PROVIDER  codex|agy|opencode  which headless CLI serves rewrites
+#                                           (default codex; see providers.sh)
+#   CLAUDISH_MODEL     <model>         model passed to that CLI (empty = the
+#                                           CLI's own default)
+#   CLAUDISH_EFFORT    low|medium|high reasoning effort for the rewrite only
+#   CLAUDISH_MIN_CHARS <n>            skip messages shorter than this
+#                                           (prose, code stripped) (default 200)
+#   CLAUDISH_STUB      1|0            deterministic stub instead of the LLM
+#                                           (for display-mechanics testing)
+#   CLAUDISH_TIMEOUT   <seconds>      LLM client timeout (default 45)
+#   CLAUDISH_DEBUG     1|0            write a debug log (default 0)
+#   CLAUDISH_NOTICE    1|0            once-per-session on-screen notice when the
+#                                           rewrite is skipped because the CLI is
+#                                           missing, times out, or errors
+#                                           (default 1)
+# ---------------------------------------------------------------------------
+set -uo pipefail
+[ "${CLAUDISH_INTERNAL:-0}" != 1 ] || exit 0
+
+ENABLED="${CLAUDISH_ENABLED:-1}"
+# Runtime kill switch: env is frozen at session launch, so a hotkey or script
+# can't flip CLAUDISH_ENABLED mid-session. A flag file can be checked fresh on
+# every invocation. Create it to pause rewrites instantly; remove it to resume.
+[ -f "${CLAUDISH_OFF_FILE:-$HOME/.claude/claudish-off}" ] && ENABLED=0
+MODE="${CLAUDISH_MODE:-append}"
+# Runtime display-mode override written by /claudish (claudish-ctl.sh): like the
+# off-file, a file re-read per message flips append<->replace mid-session where
+# the frozen CLAUDISH_MODE env cannot. Only the two known values are honoured;
+# anything else (or no file) leaves the env/default in place.
+_mode_file="${CLAUDISH_MODE_FILE:-$HOME/.claude/claudish-mode}"
+if [ -f "$_mode_file" ]; then
+  case "$(cat "$_mode_file" 2>/dev/null | tr -d '[:space:]')" in
+    append)  MODE=append ;;
+    replace) MODE=replace ;;
+  esac
+fi
+# Rewrite-style preset (display hook only): "tldr" = a clearly shorter summary,
+# "5y" = explain like I'm five, "caveman" = blunt caveman speak. Unset/other =
+# the default plain-language rewrite.
+# Like MODE, the env is the launch default and a flag file overrides it live.
+STYLE=""
+case "${CLAUDISH_STYLE:-}" in tldr|5y|caveman) STYLE="$CLAUDISH_STYLE" ;; esac
+_style_file="${CLAUDISH_STYLE_FILE:-$HOME/.claude/claudish-style}"
+if [ -f "$_style_file" ]; then
+  case "$(cat "$_style_file" 2>/dev/null | tr -d '[:space:]')" in
+    tldr)    STYLE=tldr ;;
+    5y)      STYLE=5y ;;
+    caveman) STYLE=caveman ;;
+  esac
+fi
+MIN_CHARS="${CLAUDISH_MIN_CHARS:-200}"
+STUB="${CLAUDISH_STUB:-0}"
+LLM_TIMEOUT="${CLAUDISH_TIMEOUT:-45}"
+DEBUG="${CLAUDISH_DEBUG:-0}"
+NOTICE="${CLAUDISH_NOTICE:-1}"
+
+BUF_ROOT="${TMPDIR:-/tmp}/claudish-to-english"
+# SEP (the on-screen label above the rewrite) names the configured output
+# language, so it is built on the final chunk, once that language is known.
+
+mkdir -p "$BUF_ROOT" 2>/dev/null || true
+
+dbg() { [ "$DEBUG" = "1" ] && printf '%s [%s] %s\n' "$(date '+%H:%M:%S')" "$$" "$*" >> "$BUF_ROOT/debug.log" 2>/dev/null; return 0; }
+
+# Fail-open: keep the original delta on screen.
+pass_through() { dbg "pass_through"; exit 0; }
+
+SELF_DIR="$(cd "$(dirname "$0")" && pwd)"
+
+# Provider layer (codex/agy/opencode CLIs): PROVIDER/MODEL, llm_complete,
+# llm_notice_why. Missing file -> fail open.
+. "$SELF_DIR/../skills/agentish-rewriter/scripts/providers.sh" 2>/dev/null || pass_through
+
+# Output-language resolver (lang.sh). Defined here first so a missing file
+# degrades to "no configured language" — the rewrite then keeps the message's
+# own language — instead of stopping rewrites.
+claudish_language() { :; }
+. "$SELF_DIR/lang.sh" 2>/dev/null || dbg "no lang.sh; keeping the message's language"
+
+# Replace this chunk's on-screen text with $1 (a temp file, read and then
+# removed here — the opportunistic find below only sweeps buffer DIRECTORIES,
+# so without this these would pile up in TMPDIR one per assistant message).
+emit() {
+  jq -n --rawfile dc "$1" \
+    '{hookSpecificOutput:{hookEventName:"MessageDisplay",displayContent:$dc}}' \
+    2>/dev/null || { rm -f "$1" 2>/dev/null; pass_through; }
+  rm -f "$1" 2>/dev/null
+  exit 0
+}
+
+# Emit an empty string (used to suppress intermediate chunks in replace mode).
+emit_empty() {
+  jq -n '{hookSpecificOutput:{hookEventName:"MessageDisplay",displayContent:""}}' 2>/dev/null || pass_through
+  exit 0
+}
+
+[ "$ENABLED" = "1" ] || pass_through
+command -v jq  >/dev/null 2>&1 || pass_through
+
+payload="$(cat)"
+[ -n "$payload" ] || pass_through
+
+mid="$(printf '%s' "$payload"   | jq -r '.message_id // empty' 2>/dev/null)"
+sid="$(printf '%s' "$payload"   | jq -r '.session_id // "nosession"' 2>/dev/null)"
+idx="$(printf '%s' "$payload"   | jq -r '(.index // 0) | tostring' 2>/dev/null)"
+final="$(printf '%s' "$payload" | jq -r '.final // false' 2>/dev/null)"
+tpath="$(printf '%s' "$payload" | jq -r '.transcript_path // empty' 2>/dev/null)"
+# Only used to find project-level .claude/settings*.json; the hook already runs
+# in the session's directory, so $PWD is a fine fallback when the event carries
+# no cwd of its own.
+cwd="$(printf '%s' "$payload"   | jq -r '.cwd // empty' 2>/dev/null)"
+[ -d "$cwd" ] || cwd="$PWD"
+[ -n "$mid" ] || pass_through
+case "$idx" in ''|*[!0-9]*) idx=0 ;; esac
+
+# Opportunistic cleanup of abandoned buffers (older than 30 min), then of the
+# session directories they leave behind once empty.
+find "$BUF_ROOT" -mindepth 2 -maxdepth 2 -type d -mmin +30 -exec rm -rf {} + 2>/dev/null || true
+find "$BUF_ROOT" -mindepth 1 -maxdepth 1 -type d -empty -mmin +30 -exec rmdir {} + 2>/dev/null || true
+
+mdir="$BUF_ROOT/$sid/$mid"
+mkdir -p "$mdir" 2>/dev/null || pass_through
+
+# Persist this chunk's delta exactly (jq -j = no added trailing newline).
+printf '%s' "$payload" | jq -j '.delta // ""' > "$mdir/$(printf '%08d' "$idx").part" 2>/dev/null || pass_through
+dbg "chunk idx=$idx final=$final mid=$mid mode=$MODE"
+
+# ---- opt-out marker -------------------------------------------------------
+# A message that BEGINS with this marker is never rewritten (used by
+# /claudish last, whose whole point is reprinting an original — rewriting it
+# again would defeat it). The marker itself is stripped from the display.
+SKIP_MARK='<!-- claudish:original -->'
+strip_mark() { s="${1#"$SKIP_MARK"}"; s="${s#$'\n'}"; s="${s#$'\n'}"; printf '%s' "$s"; }
+if [ "$idx" = "0" ]; then
+  case "$(cat "$mdir/00000000.part" 2>/dev/null)" in
+    "$SKIP_MARK"*) : > "$mdir/skip" 2>/dev/null ;;
+  esac
+fi
+
+# ---- non-final chunks ----------------------------------------------------
+if [ "$final" != "true" ]; then
+  # Marked message in append mode: stream it, but hide the marker in chunk 0.
+  if [ -f "$mdir/skip" ] && [ "$MODE" != "replace" ] && [ "$idx" = "0" ]; then
+    out="$BUF_ROOT/$sid.$mid.strip"
+    strip_mark "$(cat "$mdir/00000000.part" 2>/dev/null)" > "$out" 2>/dev/null && emit "$out"
+    pass_through
+  fi
+  # append: let the original stream through untouched.
+  # replace: suppress the streamed original; the whole rewrite lands on final.
+  if [ "$MODE" = "replace" ]; then emit_empty; else pass_through; fi
+fi
+
+# ---- final chunk: reconstruct + rewrite ----------------------------------
+full="$(cat "$mdir"/*.part 2>/dev/null)"
+final_part="$mdir/$(printf '%08d' "$idx").part"
+
+# Prose length gate (strip fenced code blocks, then count non-space chars).
+prose_len="$(printf '%s' "$full" \
+  | awk 'BEGIN{f=0} /^```/{f=!f; next} f==0{print}' \
+  | tr -d '[:space:]' | wc -c | tr -d ' ')"
+dbg "final: prose_len=$prose_len min=$MIN_CHARS mode=$MODE full_bytes=${#full}"
+
+cleanup() { rm -rf "$mdir" 2>/dev/null || true; }
+
+# Marked message -> never rewrite; re-show the original without the marker.
+# (replace mode blanked every previous chunk, so it needs the whole message;
+# append mode streamed chunk 0 already stripped, so only the final delta.)
+if [ -f "$mdir/skip" ]; then
+  dbg "skip: original-reprint marker"
+  out="$BUF_ROOT/$sid.$mid.orig"
+  if [ "$MODE" = "replace" ]; then src="$full"; else src="$(cat "$final_part" 2>/dev/null)"; fi
+  cleanup
+  strip_mark "$src" > "$out" 2>/dev/null && emit "$out"
+  pass_through
+fi
+
+# Below threshold -> do not rewrite.
+if [ "${prose_len:-0}" -lt "$MIN_CHARS" ]; then
+  dbg "skip: below min_chars"
+  cleanup
+  # replace mode already blanked the intermediate chunks, so it MUST re-show
+  # the full original here; append mode already streamed it.
+  if [ "$MODE" = "replace" ]; then
+    out="$mdir.orig"; printf '%s' "$full" > "$out" 2>/dev/null && emit "$out"
+  fi
+  pass_through
+fi
+
+# ---- output language ------------------------------------------------------
+# Resolved on the final chunk only: it reads settings files, and nothing before
+# here needs it. Empty -> the rewrite follows the language of the message, so
+# the label must not claim one either.
+OUT_LANG="$(claudish_language "$cwd")"
+# The label names the style and, when set, the language, and marks the word
+# that carries the style in **bold**. displayContent is rendered as markdown,
+# so the emphasis is the renderer's own — no ANSI escapes: those would be at
+# the mercy of the terminal's palette (a theme is free to map any colour slot
+# onto a grey, or onto the background), and they would leak as raw bytes into
+# `claude -p` output piped to a file. Bold is an attribute, not a palette
+# lookup, so it survives every theme and degrades to readable `**word**` text
+# when the output is not a terminal at all.
+# The label is written in the target language: a Chinese reader gets a Chinese
+# label, everyone else the English one (with the language named when set).
+case "$OUT_LANG:$STYLE" in
+  简体中文:tldr)    SEP=$'\n\n────────────────────────\n📌 **摘要**：\n\n' ;;
+  简体中文:5y)      SEP=$'\n\n────────────────────────\n👶 讲给**五岁**小孩听：\n\n' ;;
+  简体中文:caveman) SEP=$'\n\n────────────────────────\n🦴 **呃。**原始人说：\n\n' ;;
+  简体中文:*)       SEP=$'\n\n────────────────────────\n💬 说**人话**：\n\n' ;;
+  *:tldr)          SEP=$'\n\n────────────────────────\n📌 **TL;DR**'"${OUT_LANG:+ in $OUT_LANG}"$':\n\n' ;;
+  *:5y)            SEP=$'\n\n────────────────────────\n👶 Like you\'re **five**'"${OUT_LANG:+, in $OUT_LANG}"$':\n\n' ;;
+  *:caveman)       SEP=$'\n\n────────────────────────\n🦴 **Ugh.** Me say'"${OUT_LANG:+ in $OUT_LANG}"$':\n\n' ;;
+  *)               SEP=$'\n\n────────────────────────\n💬 In plain **'"${OUT_LANG:-language}"$'**:\n\n' ;;
+esac
+dbg "language=${OUT_LANG:-same as the message (default)} style=${STYLE:-default}"
+
+# ---- obtain the rewrite --------------------------------------------------
+rewrite=""
+llm_rc=0
+err=""
+if [ "$STUB" = "1" ]; then
+  nparts="$(ls "$mdir"/*.part 2>/dev/null | wc -l | tr -d ' ')"
+  rewrite="STUB-SIMPLIFIED ✦ mode=$MODE chunks=$nparts prose_len=$prose_len ✦ (this text came from the hook, not the model)"
+  dbg "stub rewrite"
+else
+  # Base system prompt, replaceable via CLAUDISH_PROMPT_FILE (a file holding the
+  # whole prompt). An unset/empty/unreadable file falls back to this default, so
+  # a bad path never stops rewrites — it just uses the built-in prompt.
+  sys="You rewrite the assistant's message into much simpler, plain language. Write the rewrite in the same language as the message you are rewriting. Keep every fact, name, number, and file path. Use short sentences and everyday words. Leave fenced code blocks unchanged. Output ONLY the rewritten message with no preamble, labels, or commentary."
+  # Style presets replace the BASE prompt only: the language line below still
+  # applies, and a usable CLAUDISH_PROMPT_FILE still replaces everything —
+  # custom prompt > style > built-in.
+  case "$STYLE" in
+    tldr) sys="You rewrite the assistant's message as a SHORT summary in simple, plain language. This is a simplification, NOT a translation: it must be clearly shorter than the original — aim for half its length or less. Keep the key facts, decisions, numbers, and file paths; drop repetitions, hedges, and secondary detail. Keep technical terms, commands, and identifiers in their original form. Omit fenced code blocks (the original text is always in the transcript). Write the rewrite in the same language as the message you are rewriting. Output ONLY the rewritten message with no preamble, labels, or commentary." ;;
+    5y)   sys="You rewrite the assistant's message as if explaining it to a five-year-old: very simple words, short sentences, a friendly tone, and simple comparisons for hard ideas. Keep every important fact, name, number, and file path accurate. Keep technical terms, commands, and identifiers in their original form. Leave fenced code blocks unchanged. Write the rewrite in the same language as the message you are rewriting. Output ONLY the rewritten message with no preamble, labels, or commentary." ;;
+    caveman) sys="You rewrite the assistant's message as blunt caveman speak: very short sentences, simple forceful words, no articles, present tense. Grunt where a sentence would only hedge. Keep every important fact, name, number, and file path accurate — caveman is dumb about grammar, never about facts. Keep technical terms, commands, identifiers, and file paths exactly as written; do not cave-speak them. Leave fenced code blocks unchanged. Write the rewrite in the same language as the message you are rewriting. Output ONLY the rewritten message with no preamble, labels, or commentary." ;;
+  esac
+  # A configured language overrides "same language as the message" — it is the
+  # last word in the prompt, and it names the language explicitly. The line goes
+  # on BEFORE the prompt-file check on purpose: a usable CLAUDISH_PROMPT_FILE
+  # replaces the whole prompt, this line included. That file is the user's
+  # prompt in full, and it states its own language.
+  if [ -n "$OUT_LANG" ]; then
+    sys="$sys"$'\n\n'"Write the rewrite in $OUT_LANG instead, whatever language the assistant's message is in. Use $OUT_LANG for all prose, including headings and lists. Keep code, identifiers, file paths, commands, and quoted output exactly as they are."
+  fi
+  if [ -n "${CLAUDISH_PROMPT_FILE:-}" ]; then
+    _p=""
+    [ -r "$CLAUDISH_PROMPT_FILE" ] && _p="$(cat "$CLAUDISH_PROMPT_FILE" 2>/dev/null)"
+    if [ -n "$_p" ]; then
+      sys="$_p"
+    else
+      dbg "CLAUDISH_PROMPT_FILE set but empty/unreadable ($CLAUDISH_PROMPT_FILE); using default prompt"
+    fi
+  fi
+
+  # Frames the INPUT for every rewrite: the text is one turn of a conversation,
+  # so its pronouns are anchored to speakers the model cannot see. Without this,
+  # "I" drifts onto the rewriter and "you" onto the assistant, and the rewrite
+  # flips the roles. Deliberately AFTER the prompt-file override, unlike the
+  # language line: this is a fact about the input, not a style choice, so a
+  # custom prompt does not get to be wrong about it.
+  sys="$sys"$'\n\n'"The text you are given is a message the assistant wrote to the user. In it, \"I\", \"me\", and \"my\" refer to the assistant; \"you\" and \"your\" refer to the user. Keep that same point of view in the rewrite — never swap the two, and never address the assistant."
+
+  # Context only: the original user question the assistant is answering.
+  # Truncated to 800 codepoints inside jq (safe on multibyte boundaries).
+  userq=""
+  if [ -n "$tpath" ] && [ -f "$tpath" ]; then
+    userq="$(jq -rs '([ .[] | select(.type=="user" and (.message.content|type=="string") and (.isMeta!=true)) | .message.content ] | last // "") | .[0:800]' "$tpath" 2>/dev/null)"
+  fi
+  if [ -n "$userq" ]; then
+    sys="$sys"$'\n\n'"For context, the user asked the assistant: \"$userq\". Use this only to understand the message. Do NOT rewrite, answer, or repeat the user's question — rewrite only the assistant's message that follows."
+    dbg "context: userq_bytes=${#userq}"
+  fi
+
+  if ! llm_complete "$sys" "$full"; then
+    dbg "req build failed"; cleanup
+    [ "$MODE" = "replace" ] && { out="$mdir.orig"; printf '%s' "$full" > "$out" && emit "$out"; }
+    pass_through
+  fi
+fi
+
+# Empty/failed rewrite -> fail open (or re-show original in replace mode).
+if [ -z "$rewrite" ]; then
+  dbg "empty rewrite -> fail open (llm_rc=$llm_rc)"
+
+  # One-time, per-session notice when the cause is a FIXABLE setup problem:
+  # the CLI is not installed, timed out, or exited with an error. A merely
+  # empty completion — clean exit, no text — stays silent (llm_notice_why
+  # leaves NOTICE_WHY empty); a notice would be wrong then. The notice only APPENDS one line to the original; it never
+  # suppresses content, so the fail-open contract still holds.
+  notified="$BUF_ROOT/$sid.notified"
+  TIMEOUT_HINT="raise CLAUDISH_TIMEOUT, or set CLAUDISH_EFFORT=low / CLAUDISH_MODEL to a faster model"
+  llm_notice_why
+  if [ "$NOTICE" = "1" ] && [ ! -e "$notified" ] && [ -n "$NOTICE_WHY" ]; then
+    : > "$notified" 2>/dev/null || true
+    last_delta="$(cat "$final_part" 2>/dev/null)"
+    note=$'\n\n────────────────────────\n'"⚠️ claudish-to-english: $NOTICE_WHY. Showing Claude's original text unchanged. Shown once per session; set CLAUDISH_NOTICE=0 to silence."
+    out="$BUF_ROOT/$sid.$mid.notice"
+    if [ "$MODE" = "replace" ]; then
+      { printf '%s' "$full"; printf '%s' "$note"; } > "$out" 2>/dev/null
+    else
+      { printf '%s' "$last_delta"; printf '%s' "$note"; } > "$out" 2>/dev/null
+    fi
+    cleanup
+    emit "$out"
+  fi
+
+  cleanup
+  if [ "$MODE" = "replace" ]; then
+    out="$mdir.orig"; printf '%s' "$full" > "$out" 2>/dev/null && emit "$out"
+  fi
+  pass_through
+fi
+
+# ---- build displayContent for the final chunk ----------------------------
+out="$BUF_ROOT/$sid.$mid.out"
+if [ "$MODE" = "replace" ]; then
+  # Everything before was suppressed; show only the rewrite.
+  printf '%s' "$rewrite" > "$out"
+else
+  # append: keep the streamed original (final chunk = its last delta),
+  # then append the simplified version.
+  { cat "$final_part" 2>/dev/null; printf '%s' "$SEP"; printf '%s' "$rewrite"; } > "$out"
+fi
+cleanup
+emit "$out"
