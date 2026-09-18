@@ -4,7 +4,7 @@ import { execFile } from "node:child_process";
 
 // The Bash engine owns configuration and fail-open behavior. Bound its output
 // and lifetime here too, so a broken child cannot stall answer completion.
-function automaticRewrite(text, cwd) {
+export function automaticRewrite(text, cwd) {
   if (process.env.CLAUDISH_INTERNAL === "1" || typeof text !== "string") return Promise.resolve("");
   const hook = fileURLToPath(new URL("../plugins/claudish-to-english/hooks/automatic.sh", import.meta.url));
   return new Promise((resolve) => {
@@ -51,8 +51,8 @@ export default {
         },
       });
     });
-    // OpenCode 2.0.2 has no completed-text transform. session.synthetic queues
-    // future model input; it cannot append a display-only answer (see README).
+    // The separate ./tui entry handles automatic display-only rewrites.
+    // Keep server commands usable in headless and web clients too.
   },
 };
 

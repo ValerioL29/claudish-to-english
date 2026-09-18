@@ -1,8 +1,8 @@
 # Contributing
 
-Claude and Codex hooks and the OpenCode 1 adapter share a rewrite engine and
-CLI runner with the portable Agentish Rewriter skill. OpenCode 2.0.2 supports
-the on-demand command only.
+Claude and Codex hooks and both OpenCode adapters share a rewrite engine and
+CLI runner with the portable Agentish Rewriter skill. OpenCode 2.0.7 adds an
+automatic terminal panel through its separate `tui.tsx` entry.
 Codex loads the package under `plugins/claudish-to-english/`; OpenCode uses the
 adapters under `opencode/`. Keep changes compatible with each caller and add a
 changelog entry.
@@ -29,7 +29,9 @@ your change preserves this, say so in the PR and it will get checked.
 always keep the original text. Nothing you add should change what Claude
 actually said, or write to the transcript. The Codex Stop hook likewise leaves
 model context unchanged. OpenCode 1 retains the original and appends the rewrite to the saved text part. On-demand
-rewrites return a new answer or save a document.
+rewrites return a new answer or save a document. The OpenCode 2 panel stores
+rewrites only in local UI memory and must never submit prompts or synthetic
+messages to display them.
 
 **Contributors do not bump the version and do not create tags.** Add your entry
 under `## [Unreleased]` in `CHANGELOG.md` and leave it there. The maintainer
@@ -76,6 +78,8 @@ CLI doubles to verify model selection, input transport, error handling, and
 automatic adapters without using credentials or invoking a paid model. The OpenCode
 adapters are checked against their native registration interfaces. Real model
 output and native sub-agent execution still need separate live verification.
+`node tests/panel.mjs` checks the OpenCode 2 lifecycle separately, including
+duplicate completion events, stale results, failed workers, and disposal.
 
 You can also run hooks with synthetic payloads; they read JSON on stdin and
 write JSON on stdout.
@@ -88,6 +92,7 @@ for f in *.sh plugins/claudish-to-english/hooks/*.sh plugins/claudish-to-english
 done
 node --check opencode/claudish-to-english.mjs
 node --check opencode/claudish-to-english-v1.mjs
+node --check opencode/panel.mjs
 ```
 
 **Drive the display hook end to end.** Point `TMPDIR` at a scratch directory and
@@ -115,6 +120,11 @@ printf '{"session_id":"s","final":true}' | bash rewrite.sh; echo "rc=$?"   # no 
 **If you touched anything user-visible on screen, check it in a real session**
 rather than only in the JSON. The terminal renderer is not a pass-through — see
 the ANSI trap below.
+
+For the OpenCode 2 panel, load the `opencode/` directory in an isolated 2.0.7
+terminal session with `CLAUDISH_STUB=1`. Complete a turn, verify that the panel
+opens, exercise Esc and `/agentish-panel`, and check that exporting the session
+contains only the original answer. JSX must be checked in OpenCode's renderer.
 
 ---
 

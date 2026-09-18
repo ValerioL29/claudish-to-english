@@ -72,25 +72,29 @@ Its marketplace is `.agents/plugins/marketplace.json`.
 
 ### OpenCode
 
-Keep this checkout on disk. From its root, link the adapter into OpenCode's
-native plugin directory. For **OpenCode 2** (tested with 2.0.2):
+Keep this checkout on disk. For **OpenCode 2** (tested with 2.0.7), add its
+`opencode/` directory to the `plugins` array in your `opencode.json(c)`:
+
+```json
+{
+  "plugins": ["/absolute/path/to/claudish-to-english/opencode"]
+}
+```
+
+Preserve other entries in your config. If upgrading from the old single-file
+installation, remove its `plugins/claudish-to-english.js` symlink first. The
+directory entry loads both `/agentish-rewriter` and the terminal rewrite panel.
+
+For **OpenCode 1**, link the legacy adapter from the checkout root:
 
 ```shell
 opencode_config_dir="${OPENCODE_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/opencode}"
 mkdir -p "$opencode_config_dir/plugins"
-ln -s "$PWD/opencode/claudish-to-english.mjs" "$opencode_config_dir/plugins/claudish-to-english.js"
-```
-
-For **OpenCode 1**, use the legacy adapter in that last command instead:
-
-```shell
 ln -s "$PWD/opencode/claudish-to-english-v1.mjs" "$opencode_config_dir/plugins/claudish-to-english.js"
 ```
 
-Restart OpenCode. The plugin registers `/agentish-rewriter`; OpenCode 1 also
-enables automatic rewriting. It preserves an existing user command with that
-name. Keep the adapter and `plugins/` directory
-together. The commands above refuse to overwrite an existing installation.
+Restart OpenCode. The plugin preserves an existing `/agentish-rewriter` command.
+Keep the checkout's `opencode/` and `plugins/` directories together.
 No npm package or build step is required.
 
 OpenCode 2 registers a command with an execution callback that submits the skill
@@ -110,15 +114,20 @@ include short answers.
 | Claude Code | `MessageDisplay`: append or replace the displayed answer | Original unchanged |
 | Codex | `Stop`: append a rewrite via `systemMessage`, rendered as a hook warning/event | Original unchanged; rewrite is outside model context |
 | OpenCode 1 | `experimental.text.complete`: append to each completed text part | Original plus rewrite |
-| OpenCode 2.0.2 | On-demand command; no supported completed-text/display transform | Earlier messages unchanged |
+| OpenCode 2.0.7 terminal | Successful turns open a separate rewrite panel | Original unchanged; rewrite stays in local UI memory |
 
 Codex and OpenCode 1 use **append only**: their adapters do not suppress the
 original stream. OpenCode 1's rewrites are persisted and can influence later
 answers. Its [completion hook updates the saved text part](https://github.com/anomalyco/opencode/blob/dev/packages/opencode/src/session/processor.ts).
-OpenCode 2.0.2 lacks this hook. Its `session.synthetic` API queues model input,
-even with `resume: false`; a live isolated-server check confirmed that it does
-not append to the visible conversation. Automatic rewriting is therefore
-unavailable in that adapter. Use `/agentish-rewriter` on OpenCode 2.
+OpenCode 2 uses the [CLI session panel API](https://opencode.ai/v2/docs/build/plugins/cli/#session-panels).
+It rewrites the final assistant text after a successful turn in the visible
+parent session. The panel opens when the rewrite is ready; press Esc to close
+it, or use `/agentish-panel` to reopen it. Press `f` to toggle fullscreen on
+wide terminals. The panel displays plain text and retains the latest rewrite
+per session until the terminal exits. A new turn clears it and invalidates any
+older pending result. Failed turns, background sessions, and sub-agent sessions
+do not start rewrites. The terminal runs the configured rewrite CLI locally.
+Web and headless clients retain `/agentish-rewriter` without automatic panels.
 The `/claudish` dashboard, session-start notice, and automatic Markdown-file hook
 remain Claude-specific; on-demand Markdown rewriting works in all three hosts.
 
@@ -126,19 +135,20 @@ Set environment variables before launching the host (or its server), for example
 
 ```shell
 CLAUDISH_PROVIDER=codex CLAUDISH_MODEL=gpt-5.6-luna CLAUDISH_LANG=zh codex
-CLAUDISH_PROVIDER=codex CLAUDISH_MODEL=gpt-5.6-luna CLAUDISH_STYLE=tldr opencode # OpenCode 1 automatic rewriting
+CLAUDISH_PROVIDER=codex CLAUDISH_MODEL=gpt-5.6-luna CLAUDISH_STYLE=tldr opencode
 ```
 
-Restart an existing OpenCode background service when changing its environment.
+Restart the OpenCode terminal when changing its panel environment; OpenCode 1
+also needs an existing background service restarted.
 The adapters share `CLAUDISH_ENABLED`, `CLAUDISH_OFF_FILE`, style, language,
 provider, model, custom prompt, threshold, and timeout settings with Claude.
 Existing `~/.claude/claudish-*` flags therefore affect all hosts; use the `*_FILE`
-overrides for independent settings. Codex/OpenCode 1 keep the source language
+overrides for independent settings. Codex/OpenCode keep the source language
 unless a language flag or `CLAUDISH_LANG` is set; they do not read Claude's
 project language setting. They fail silently on rewrite errors.
 
 Worker CLIs receive an internal recursion guard to prevent nested automatic
-rewrites. OpenCode 1 also skips native sub-agent sessions. Answers beginning with `<!-- claudish:original -->` skip automatic rewriting;
+rewrites. Both OpenCode adapters also skip native sub-agent sessions. Answers beginning with `<!-- claudish:original -->` skip automatic rewriting;
 the on-demand skill adds this Markdown comment to its final result.
 
 ## Agentish Rewriter
@@ -343,7 +353,7 @@ claudish-to-english/
 ├── .claude-plugin/         # plugin.json, marketplace.json
 ├── .agents/plugins/        # Codex marketplace
 ├── plugins/claudish-to-english/ # self-contained Codex plugin + shared skill
-├── opencode/               # OpenCode commands + v1 automatic rewriting
+├── opencode/               # OpenCode commands, v1 hook, and v2 terminal panel
 ├── commands/claudish.md    # /claudish slash command
 ├── hooks/hooks.json        # SessionStart / MessageDisplay / PostToolUse wiring
 ├── rewrite.sh              # entry point to the shared display engine

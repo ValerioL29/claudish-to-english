@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
 import plugin from "../opencode/claudish-to-english-v1.mjs";
 import pluginV2 from "../opencode/claudish-to-english.mjs";
+import "./panel.mjs";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
 const scratch = mkdtempSync(join(tmpdir(), "agentish-check-"));
