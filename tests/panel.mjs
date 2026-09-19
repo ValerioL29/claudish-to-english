@@ -6,12 +6,13 @@ const handlers = new Map();
 const published = [];
 const opened = [];
 let route = { type: "session", sessionID: "parent" };
-let info = {};
+let info = { location: { directory: "/scratch" } };
 let messages = [];
 let calls = 0;
 let worker = async () => "Rewrite.";
+let workerSignal;
 const context = {
-  location: { directory: "/scratch" },
+  location: { directory: "/other-project" },
   data: {
     on: (name, callback) => {
       handlers.set(name, callback);
@@ -27,8 +28,9 @@ const context = {
     panel: { open: (name) => opened.push(name) },
   },
 };
-const stop = watchAnswers(context, (id, text) => published.push({ id, text }), async (text, cwd) => {
+const stop = watchAnswers(context, (id, text) => published.push({ id, text }), async (text, cwd, signal) => {
   calls++;
+  workerSignal = signal;
   assert.equal(cwd, "/scratch");
   assert.equal(text, "Original.\n\nSecond part.");
   return worker();
@@ -57,6 +59,7 @@ for (const invalid of [[], [{ type: "user" }], [{ ...answer, error: {} }],
 }
 messages = [answer];
 event("started");
+context.location.directory = "/scratch";
 await event("succeeded", "background");
 info = { parentID: "other" };
 await event("succeeded");
@@ -76,7 +79,9 @@ let release;
 worker = () => new Promise((resolve) => { release = resolve; });
 const pending = event("succeeded");
 await Promise.resolve();
+assert.equal(workerSignal.aborted, false);
 event("started");
+assert.equal(workerSignal.aborted, true);
 release("Stale rewrite.");
 await pending;
 assert.equal(published.at(-1).text, "");
@@ -105,6 +110,7 @@ worker = () => new Promise((resolve) => { release = resolve; });
 const unloading = event("succeeded");
 await Promise.resolve();
 stop();
+assert.equal(workerSignal.aborted, true);
 const count = published.length;
 release("Too late.");
 await unloading;

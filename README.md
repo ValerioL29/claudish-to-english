@@ -125,8 +125,9 @@ parent session. The panel opens when the rewrite is ready; press Esc to close
 it, or use `/agentish-panel` to reopen it. Press `f` to toggle fullscreen on
 wide terminals. The panel displays plain text and retains the latest rewrite
 per session until the terminal exits. A new turn clears it and invalidates any
-older pending result. Failed turns, background sessions, and sub-agent sessions
-do not start rewrites. The terminal runs the configured rewrite CLI locally.
+older pending result, cancelling its local rewrite process group. Unloading the
+plugin also cancels pending rewrites. Failed turns, background sessions, and
+sub-agent sessions do not start rewrites. The terminal runs the configured rewrite CLI locally.
 Web and headless clients retain `/agentish-rewriter` without automatic panels.
 The `/claudish` dashboard, session-start notice, and automatic Markdown-file hook
 remain Claude-specific; on-demand Markdown rewriting works in all three hosts.

@@ -6,7 +6,8 @@ import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
 import plugin from "../opencode/claudish-to-english-v1.mjs";
-import pluginV2 from "../opencode/claudish-to-english.mjs";
+import pluginV2, { automaticRewrite } from "../opencode/claudish-to-english.mjs";
+import { setTimeout as delay } from "node:timers/promises";
 import "./panel.mjs";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
@@ -60,7 +61,12 @@ const args = process.argv.slice(2);
 const input = fs.readFileSync(0, "utf8");
 fs.writeFileSync(process.env.MOCK_CAPTURE, JSON.stringify({ args, input, cwd: process.cwd(), internal: process.env.CLAUDISH_INTERNAL }));
 if (process.env.MOCK_MODE === "fail") { console.error("unsupported model"); process.exit(3); }
-if (process.env.MOCK_MODE === "timeout") { setInterval(() => {}, 1000); }
+if (process.env.MOCK_MODE === "cancel") {
+  const child = require("node:child_process").spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" });
+  fs.writeFileSync(process.env.MOCK_CAPTURE, JSON.stringify({ pid: process.pid, child: child.pid }));
+  setInterval(() => {}, 1000);
+}
+else if (process.env.MOCK_MODE === "timeout") { setInterval(() => {}, 1000); }
 else if (args.includes("--format")) {
   if (process.env.MOCK_MODE === "malformed") console.log("not JSON");
   else {
@@ -192,6 +198,35 @@ else if (args.includes("--format")) {
     const unchanged = { text: "Original prose." };
     await hooks["experimental.text.complete"]({}, unchanged);
     assert.equal(unchanged.text, "Original prose.");
+    delete process.env.CLAUDISH_INTERNAL;
+    process.env.MOCK_MODE = "cancel";
+    rmSync(env.MOCK_CAPTURE);
+    const controller = new AbortController();
+    const pending = automaticRewrite("Original prose.", scratch, controller.signal);
+    let pids;
+    try {
+      const deadline = Date.now() + 5000;
+      while (Date.now() < deadline) {
+        if (existsSync(env.MOCK_CAPTURE)) {
+          pids = JSON.parse(readFileSync(env.MOCK_CAPTURE));
+          if (pids.child) break;
+        }
+        await delay(20);
+      }
+      assert.ok(pids?.child, "Mock provider did not start");
+      controller.abort();
+      assert.equal(await pending, "");
+      const alive = (pid) => { try { process.kill(pid, 0); return true; } catch { return false; } };
+      for (let i = 0; i < 50 && (alive(pids.pid) || alive(pids.child)); i++) await delay(20);
+      assert.equal(alive(pids.pid), false, "Cancelled provider is still running");
+      assert.equal(alive(pids.child), false, "Cancelled provider's child is still running");
+      assert.equal(await automaticRewrite("Original prose.", scratch, controller.signal), "");
+    } finally {
+      controller.abort();
+      for (const pid of [pids?.pid, pids?.child]) if (pid) {
+        try { process.kill(pid, "SIGKILL"); } catch { /* Already exited. */ }
+      }
+    }
     process.env.MOCK_MODE = "success";
     sessionInfo = { parentID: "parent-session" };
     await hooks["experimental.text.complete"]({}, unchanged);
@@ -204,7 +239,7 @@ else if (args.includes("--format")) {
     for (const key of Object.keys(process.env)) if (!(key in savedEnv)) delete process.env[key];
     Object.assign(process.env, savedEnv);
   }
-  console.log("PASS: registration, providers, recursion guards, failures, Claude hooks, and automatic Codex/OpenCode adapters");
+  console.log("PASS: registration, providers, recursion guards, failures, process-group cancellation, Claude hooks, and automatic Codex/OpenCode adapters");
 } finally {
   rmSync(scratch, { recursive: true, force: true });
 }

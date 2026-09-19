@@ -1,16 +1,40 @@
 import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
-import { execFile } from "node:child_process";
+import { spawn } from "node:child_process";
 
 // The Bash engine owns configuration and fail-open behavior. Bound its output
 // and lifetime here too, so a broken child cannot stall answer completion.
-export function automaticRewrite(text, cwd) {
-  if (process.env.CLAUDISH_INTERNAL === "1" || typeof text !== "string") return Promise.resolve("");
+export function automaticRewrite(text, cwd, signal) {
+  if (signal?.aborted || process.env.CLAUDISH_INTERNAL === "1" || typeof text !== "string") return Promise.resolve("");
   const hook = fileURLToPath(new URL("../plugins/claudish-to-english/hooks/automatic.sh", import.meta.url));
   return new Promise((resolve) => {
-    const child = execFile("bash", [hook, "opencode"], {
-      timeout: 60000, killSignal: "SIGKILL", maxBuffer: 8 * 1024 * 1024,
-    }, (error, stdout) => resolve(error ? "" : stdout));
+    const child = spawn("bash", [hook, "opencode"], {
+      detached: true, stdio: ["pipe", "pipe", "ignore"],
+    });
+    const chunks = [];
+    let bytes = 0, failed = false;
+    // Bash launches the provider as a descendant. A separate process group lets
+    // cancellation reach the CLI too, while SIGTERM allows shell cleanup traps.
+    const terminate = (signal) => {
+      failed = true;
+      if (child.pid) try { process.kill(-child.pid, signal); } catch { /* Already exited. */ }
+    };
+    const cancel = () => terminate("SIGTERM");
+    const timer = setTimeout(() => terminate("SIGKILL"), 60000);
+    const finish = (error) => {
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", cancel);
+      resolve(error || failed || signal?.aborted ? "" : Buffer.concat(chunks).toString("utf8"));
+    };
+    signal?.addEventListener("abort", cancel, { once: true });
+    child.on("error", finish);
+    child.on("close", (code) => finish(code !== 0));
+    child.stdout.on("data", (chunk) => {
+      if (failed) return;
+      bytes += chunk.length;
+      if (bytes > 8 * 1024 * 1024) return terminate("SIGKILL");
+      chunks.push(chunk);
+    });
     child.stdin.on("error", () => {}); // A missing engine may close stdin early.
     child.stdin.end(JSON.stringify({ text, cwd }));
   });

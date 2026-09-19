@@ -39,7 +39,7 @@ export default Plugin.define({
           <scrollbox flexGrow={1} focused={panel.focused}>
             <text wrapMode="word">{state[panel.sessionID] || "No rewrite available for the current turn."}</text>
           </scrollbox>
-          <text fg={context.theme.text.muted}>Esc: close · f: fullscreen</text>
+          <text fg={context.theme.text.subdued}>Esc: close · f: fullscreen</text>
         </box>
       );
     }

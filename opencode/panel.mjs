@@ -12,6 +12,7 @@ export function watchAnswers(context, publish, rewrite = automaticRewrite) {
     return route.type === "session" && route.sessionID === id;
   };
   const started = context.data.on("session.execution.started", ({ data }) => {
+    requests.get(data.sessionID)?.abort();
     requests.delete(data.sessionID); // Invalidate a previous turn's pending result.
     publish(data.sessionID, "");
   });
@@ -23,7 +24,7 @@ export function watchAnswers(context, publish, rewrite = automaticRewrite) {
       if (!info || info.parentID) return;
       // Mark before awaiting so replayed events cannot start duplicate workers.
       if (requests.has(id)) return;
-      const request = {};
+      const request = new AbortController();
       requests.set(id, request);
       await context.data.session.message.sync(id);
       if (disposed || requests.get(id) !== request) return;
@@ -32,7 +33,7 @@ export function watchAnswers(context, publish, rewrite = automaticRewrite) {
       if (last?.type !== "assistant" || last.error || !last.time?.completed) return;
       const text = last.content.filter((part) => part.type === "text").map((part) => part.text).join("\n\n");
       if (!text.trim() || text.startsWith("<!-- claudish:original -->")) return;
-      const result = await rewrite(text, info.location?.directory ?? context.location?.directory);
+      const result = await rewrite(text, info.location?.directory ?? context.location?.directory, request.signal);
       if (disposed || requests.get(id) !== request) return;
       publish(id, result.trim());
       if (result.trim() && visible(id)) context.ui.panel.open(panelName);
@@ -42,6 +43,7 @@ export function watchAnswers(context, publish, rewrite = automaticRewrite) {
     disposed = true;
     started();
     completed();
+    for (const request of requests.values()) request.abort();
     requests.clear();
   };
 }
