@@ -1,0 +1,9 @@
+{
+  "name": "claudish-to-english-opencode",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./claudish-to-english.mjs",
+    "./tui": "./tui.tsx"
+  }
+}

@@ -7,13 +7,14 @@ only two output languages (English, 简体中文). **Display-only** —
 Claude's reasoning and the saved transcript always keep the original text.
 
 Codex has an automatic append-only `Stop` hook. OpenCode 1 appends rewrites
-through its completed-text hook; OpenCode 2.0.2 has on-demand support only.
+through its completed-text hook; OpenCode 2.0.7 shows automatic rewrites in a
+separate terminal panel without changing the transcript.
 All hosts expose the on-demand `agentish-rewriter` skill, with a
 user-selected model. Its canonical files live under
 `plugins/claudish-to-english/skills/agentish-rewriter/`.
 
-Plain bash + `jq`, with small OpenCode JavaScript adapters. No build or runtime
-dependencies to install. Run `node tests/check.mjs` for offline integration checks.
+Plain bash + `jq`, with small OpenCode adapters and host-rendered JSX. No build
+step or dependencies to install. Run `node tests/check.mjs` for offline checks.
 
 `CONTRIBUTING.md` is the full version of this file; it is the source of truth if
 the two ever disagree.
@@ -28,7 +29,7 @@ the two ever disagree.
 | `session-notice.sh` | `SessionStart` hook — warns that flag files from an earlier session are still active |
 | `providers.sh` | compatibility entry point to the skill's shared CLI provider layer |
 | `plugins/claudish-to-english/` | self-contained Codex plugin, shared skill and provider scripts |
-| `opencode/` | OpenCode command adapters and the v1 automatic completion hook |
+| `opencode/` | OpenCode command adapters, v1 completion hook, and v2 terminal panel |
 | `lang.sh` | entry point to the shared `en`/`zh` resolver; anything else normalises to empty, which is also the sanitiser. Sourced by both hooks |
 | `commands/claudish.md` | the `/claudish` slash command |
 | `hooks/hooks.json` | wires the three hooks |

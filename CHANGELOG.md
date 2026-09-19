@@ -8,6 +8,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Automatic OpenCode 2.0.7 terminal rewrites.** A local session panel displays
+  the final answer's rewrite after successful turns, without changing saved
+  messages or model context. It reuses the configured CLI model, skips background
+  and sub-agent sessions, cancels obsolete workers, and discards stale results.
+  `/agentish-panel` reopens the latest rewrite; `/agentish-rewriter` remains available in all clients.
+  Install the `opencode/` directory to load both server and terminal entries.
 - **Codex and OpenCode plugins with Agentish Rewriter.** Rewrite the previous
   answer or a Markdown document through the user-selected model. Use native
   sub-agents when the host can select that model, with the existing headless
